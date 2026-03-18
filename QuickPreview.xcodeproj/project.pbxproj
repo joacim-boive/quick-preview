@@ -1,0 +1,429 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100001000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000001 /* AppDelegate.swift */; };
+		100001000000000000000002 /* MainPlayerWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000002 /* MainPlayerWindowController.swift */; };
+		100001000000000000000003 /* GlobalHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000003 /* GlobalHotkeyManager.swift */; };
+		100001000000000000000004 /* KeyCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000004 /* KeyCaptureView.swift */; };
+		100001000000000000000005 /* PlaybackTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000005 /* PlaybackTypes.swift */; };
+		100001000000000000000006 /* PlaybackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000006 /* PlaybackEngine.swift */; };
+		100001000000000000000007 /* LoopController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000007 /* LoopController.swift */; };
+		100001000000000000000008 /* PreciseSeekController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000008 /* PreciseSeekController.swift */; };
+		100001000000000000000014 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000009 /* main.swift */; };
+		100001000000000000000009 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000001 /* AppKit.framework */; };
+		100001000000000000000010 /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000002 /* AVKit.framework */; };
+		100001000000000000000011 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000003 /* AVFoundation.framework */; };
+		100001000000000000000012 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000004 /* Carbon.framework */; };
+		100001000000000000000013 /* QuickPreviewExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 100000600000000000000002 /* QuickPreviewExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+
+		100001000000000000000101 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000101 /* PreviewViewController.swift */; };
+		100001000000000000000102 /* PlaybackTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000005 /* PlaybackTypes.swift */; };
+		100001000000000000000103 /* PlaybackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000006 /* PlaybackEngine.swift */; };
+		100001000000000000000104 /* LoopController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000007 /* LoopController.swift */; };
+		100001000000000000000105 /* PreciseSeekController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000008 /* PreciseSeekController.swift */; };
+		100001000000000000000106 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000001 /* AppKit.framework */; };
+		100001000000000000000107 /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000002 /* AVKit.framework */; };
+		100001000000000000000108 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000003 /* AVFoundation.framework */; };
+		100001000000000000000109 /* QuickLookUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000005 /* QuickLookUI.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		100000700000000000000001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				100001000000000000000013 /* QuickPreviewExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		100000100000000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		100000100000000000000002 /* MainPlayerWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainPlayerWindowController.swift; sourceTree = "<group>"; };
+		100000100000000000000003 /* GlobalHotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkeyManager.swift; sourceTree = "<group>"; };
+		100000100000000000000004 /* KeyCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCaptureView.swift; sourceTree = "<group>"; };
+		100000100000000000000005 /* PlaybackTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackTypes.swift; sourceTree = "<group>"; };
+		100000100000000000000006 /* PlaybackEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackEngine.swift; sourceTree = "<group>"; };
+		100000100000000000000007 /* LoopController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopController.swift; sourceTree = "<group>"; };
+		100000100000000000000008 /* PreciseSeekController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreciseSeekController.swift; sourceTree = "<group>"; };
+		100000100000000000000009 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		100000100000000000000101 /* PreviewViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewViewController.swift; sourceTree = "<group>"; };
+		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
+		100000100000000000000202 /* QuickLookExtension-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "QuickLookExtension-Info.plist"; sourceTree = "<group>"; };
+
+		100000300000000000000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		100000300000000000000002 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
+		100000300000000000000003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		100000300000000000000004 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
+		100000300000000000000005 /* QuickLookUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuickLookUI.framework; path = System/Library/Frameworks/QuickLookUI.framework; sourceTree = SDKROOT; };
+
+		100000600000000000000001 /* QuickPreview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickPreview.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		100000600000000000000002 /* QuickPreviewExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = QuickPreviewExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		100000800000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100001000000000000000009 /* AppKit.framework in Frameworks */,
+				100001000000000000000010 /* AVKit.framework in Frameworks */,
+				100001000000000000000011 /* AVFoundation.framework in Frameworks */,
+				100001000000000000000012 /* Carbon.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100000800000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100001000000000000000106 /* AppKit.framework in Frameworks */,
+				100001000000000000000107 /* AVKit.framework in Frameworks */,
+				100001000000000000000108 /* AVFoundation.framework in Frameworks */,
+				100001000000000000000109 /* QuickLookUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		100000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				100000200000000000000001 /* Sources */,
+				100000400000000000000001 /* Frameworks */,
+				100000500000000000000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		100000200000000000000001 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				100000200000000000000101 /* App */,
+				100000200000000000000102 /* QuickLookExtension */,
+				100000200000000000000103 /* Shared */,
+				100000200000000000000104 /* Resources */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		100000200000000000000101 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				100000100000000000000001 /* AppDelegate.swift */,
+				100000100000000000000009 /* main.swift */,
+				100000100000000000000002 /* MainPlayerWindowController.swift */,
+				100000100000000000000003 /* GlobalHotkeyManager.swift */,
+				100000100000000000000004 /* KeyCaptureView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		100000200000000000000102 /* QuickLookExtension */ = {
+			isa = PBXGroup;
+			children = (
+				100000100000000000000101 /* PreviewViewController.swift */,
+			);
+			path = QuickLookExtension;
+			sourceTree = "<group>";
+		};
+		100000200000000000000103 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				100000100000000000000005 /* PlaybackTypes.swift */,
+				100000100000000000000006 /* PlaybackEngine.swift */,
+				100000100000000000000007 /* LoopController.swift */,
+				100000100000000000000008 /* PreciseSeekController.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		100000200000000000000104 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				100000100000000000000201 /* App-Info.plist */,
+				100000100000000000000202 /* QuickLookExtension-Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		100000400000000000000001 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				100000300000000000000001 /* AppKit.framework */,
+				100000300000000000000002 /* AVKit.framework */,
+				100000300000000000000003 /* AVFoundation.framework */,
+				100000300000000000000004 /* Carbon.framework */,
+				100000300000000000000005 /* QuickLookUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		100000500000000000000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				100000600000000000000001 /* QuickPreview.app */,
+				100000600000000000000002 /* QuickPreviewExtension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		100000900000000000000001 /* QuickPreview */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100001100000000000000001 /* Build configuration list for PBXNativeTarget "QuickPreview" */;
+			buildPhases = (
+				100000700000000000000001 /* Embed App Extensions */,
+				100000800000000000000001 /* Frameworks */,
+				100001200000000000000001 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				100001500000000000000001 /* PBXTargetDependency */,
+			);
+			name = QuickPreview;
+			productName = QuickPreview;
+			productReference = 100000600000000000000001 /* QuickPreview.app */;
+			productType = "com.apple.product-type.application";
+		};
+		100000900000000000000002 /* QuickPreviewExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100001100000000000000002 /* Build configuration list for PBXNativeTarget "QuickPreviewExtension" */;
+			buildPhases = (
+				100000800000000000000002 /* Frameworks */,
+				100001200000000000000002 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuickPreviewExtension;
+			productName = QuickPreviewExtension;
+			productReference = 100000600000000000000002 /* QuickPreviewExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		100000a00000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					100000900000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					100000900000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = 100001100000000000000003 /* Build configuration list for PBXProject "QuickPreview" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 100000000000000000000001;
+			productRefGroup = 100000500000000000000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				100000900000000000000001 /* QuickPreview */,
+				100000900000000000000002 /* QuickPreviewExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		100001200000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100001000000000000000001 /* AppDelegate.swift in Sources */,
+				100001000000000000000014 /* main.swift in Sources */,
+				100001000000000000000002 /* MainPlayerWindowController.swift in Sources */,
+				100001000000000000000003 /* GlobalHotkeyManager.swift in Sources */,
+				100001000000000000000004 /* KeyCaptureView.swift in Sources */,
+				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
+				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
+				100001000000000000000007 /* LoopController.swift in Sources */,
+				100001000000000000000008 /* PreciseSeekController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100001200000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100001000000000000000101 /* PreviewViewController.swift in Sources */,
+				100001000000000000000102 /* PlaybackTypes.swift in Sources */,
+				100001000000000000000103 /* PlaybackEngine.swift in Sources */,
+				100001000000000000000104 /* LoopController.swift in Sources */,
+				100001000000000000000105 /* PreciseSeekController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		100001500000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 100000900000000000000002 /* QuickPreviewExtension */;
+			targetProxy = 100001600000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		100001600000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000a00000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 100000900000000000000002;
+			remoteInfo = QuickPreviewExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin XCBuildConfiguration section */
+		100001300000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quickpreview.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				INFOPLIST_FILE = Sources/Resources/App-Info.plist;
+			};
+			name = Debug;
+		};
+		100001300000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quickpreview.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				INFOPLIST_FILE = Sources/Resources/App-Info.plist;
+			};
+			name = Release;
+		};
+		100001300000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quickpreview.app.extension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				INFOPLIST_FILE = Sources/Resources/QuickLookExtension-Info.plist;
+			};
+			name = Debug;
+		};
+		100001300000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.quickpreview.app.extension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				INFOPLIST_FILE = Sources/Resources/QuickLookExtension-Info.plist;
+			};
+			name = Release;
+		};
+		100001300000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		100001300000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		100001100000000000000001 /* Build configuration list for PBXNativeTarget "QuickPreview" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				100001300000000000000001 /* Debug */,
+				100001300000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		100001100000000000000002 /* Build configuration list for PBXNativeTarget "QuickPreviewExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				100001300000000000000003 /* Debug */,
+				100001300000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		100001100000000000000003 /* Build configuration list for PBXProject "QuickPreview" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				100001300000000000000005 /* Debug */,
+				100001300000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 100000a00000000000000001 /* Project object */;
+}

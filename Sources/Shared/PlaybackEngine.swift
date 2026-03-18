@@ -1,0 +1,205 @@
+import Foundation
+import AVFoundation
+
+typealias PositionUpdateHandler = (PlaybackPosition) -> Void
+typealias LoopModeUpdateHandler = (LoopMode) -> Void
+
+final class PlaybackEngine {
+    private let player: AVPlayer
+    private let loopController: LoopController
+    private let seekController: PreciseSeekController
+    private var timeObserverToken: Any?
+
+    var onPositionUpdate: PositionUpdateHandler?
+    var onLoopModeUpdate: LoopModeUpdateHandler?
+
+    init(
+        player: AVPlayer = AVPlayer(),
+        loopController: LoopController = LoopController(),
+        seekController: PreciseSeekController = PreciseSeekController()
+    ) {
+        self.player = player
+        self.loopController = loopController
+        self.seekController = seekController
+    }
+
+    deinit {
+        detachTimeObserver()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func attach(to url: URL, autoplay: Bool = true) {
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
+
+        detachTimeObserver()
+        attachTimeObserver()
+        observePlaybackEnd(for: item)
+
+        if autoplay {
+            play()
+        }
+    }
+
+    func currentPlayer() -> AVPlayer {
+        player
+    }
+
+    func play() {
+        player.play()
+    }
+
+    func pause() {
+        player.pause()
+    }
+
+    func togglePlayPause() {
+        if player.rate == 0 {
+            player.play()
+        } else {
+            player.pause()
+        }
+    }
+
+    func setLoopFull(enabled: Bool) {
+        loopController.setFullLoop(enabled: enabled)
+        onLoopModeUpdate?(loopController.mode)
+    }
+
+    func setLoopRange(start: PlaybackSeconds, end: PlaybackSeconds) {
+        loopController.setRangeLoop(start: start, end: end)
+        onLoopModeUpdate?(loopController.mode)
+    }
+
+    func clearLoop() {
+        loopController.clearLoop()
+        onLoopModeUpdate?(loopController.mode)
+    }
+
+    func loopMode() -> LoopMode {
+        loopController.mode
+    }
+
+    func handle(command: PlaybackCommand, isCoarseStep: Bool = false) {
+        switch command {
+        case .togglePlayPause:
+            togglePlayPause()
+        case let .seekBy(seconds):
+            seekBy(seconds: seconds)
+        case let .seekTo(seconds):
+            seekTo(seconds: seconds)
+        case let .seekFrame(delta):
+            seekFrame(delta: delta)
+        case .toggleLoop:
+            switch loopController.mode {
+            case .off:
+                setLoopFull(enabled: true)
+            default:
+                setLoopFull(enabled: false)
+            }
+        }
+        _ = isCoarseStep
+    }
+
+    func seekBy(seconds: PlaybackSeconds) {
+        let duration = currentDurationSeconds()
+        let current = currentTimeSeconds()
+        let target = seekController.clampedSeekTarget(
+            current: current,
+            delta: seconds,
+            duration: duration
+        )
+        seekTo(seconds: target)
+    }
+
+    func seekTo(seconds: PlaybackSeconds) {
+        let duration = currentDurationSeconds()
+        let normalized = loopController.normalizedPosition(for: seconds, duration: duration)
+        let time = CMTime.seconds(normalized)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func seekFrame(delta: Int) {
+        guard delta != 0 else { return }
+        let current = currentTimeSeconds()
+        let step = seekController.frameStepSeconds(for: player.currentItem) ?? seekController.fineStepSeconds
+        seekBy(seconds: step * PlaybackSeconds(delta))
+        onPositionUpdate?(PlaybackPosition(seconds: current, duration: currentDurationSeconds()))
+    }
+
+    func fineStepAmount() -> PlaybackSeconds {
+        seekController.fineStepSeconds
+    }
+
+    func coarseStepAmount() -> PlaybackSeconds {
+        seekController.coarseStepSeconds
+    }
+
+    func currentTimeSeconds() -> PlaybackSeconds {
+        player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
+    }
+
+    func currentDurationSeconds() -> PlaybackSeconds {
+        guard
+            let duration = player.currentItem?.duration.seconds,
+            duration.isFinite
+        else {
+            return 0
+        }
+        return max(duration, 0)
+    }
+
+    private func observePlaybackEnd(for item: AVPlayerItem) {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePlaybackEnd(_:)),
+            name: .AVPlayerItemDidPlayToEndTime,
+            object: item
+        )
+    }
+
+    private func attachTimeObserver() {
+        let interval = CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600)
+        timeObserverToken = player.addPeriodicTimeObserver(
+            forInterval: interval,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.onPositionUpdate?(
+                PlaybackPosition(
+                    seconds: self.currentTimeSeconds(),
+                    duration: self.currentDurationSeconds()
+                )
+            )
+            self.applyRangeLoopIfNeeded()
+        }
+    }
+
+    private func detachTimeObserver() {
+        guard let token = timeObserverToken else { return }
+        player.removeTimeObserver(token)
+        timeObserverToken = nil
+    }
+
+    private func applyRangeLoopIfNeeded() {
+        let current = currentTimeSeconds()
+        let duration = currentDurationSeconds()
+        guard let restart = loopController.loopRestartTime(currentSeconds: current, duration: duration) else {
+            return
+        }
+        player.seek(to: .seconds(restart), toleranceBefore: .zero, toleranceAfter: .zero)
+        if player.rate == 0 {
+            player.play()
+        }
+    }
+
+    @objc
+    private func handlePlaybackEnd(_ notification: Notification) {
+        let duration = currentDurationSeconds()
+        guard let restart = loopController.loopRestartTime(currentSeconds: duration, duration: duration) else {
+            return
+        }
+        player.seek(to: .seconds(restart), toleranceBefore: .zero, toleranceAfter: .zero)
+        player.play()
+    }
+}
