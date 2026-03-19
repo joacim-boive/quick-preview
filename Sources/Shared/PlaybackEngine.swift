@@ -29,6 +29,9 @@ final class PlaybackEngine {
     }
 
     func attach(to url: URL, autoplay: Bool = true) {
+        loopController.clearLoop()
+        onLoopModeUpdate?(loopController.mode)
+
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
 
