@@ -8,13 +8,28 @@ final class MainPlayerWindowController: NSWindowController {
     private let timelineSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let loopButton = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
+    private let setSelectionStartButton = NSButton(title: "Set Start", target: nil, action: nil)
+    private let setSelectionEndButton = NSButton(title: "Set End", target: nil, action: nil)
+    private let replaySelectionButton = NSButton(checkboxWithTitle: "Replay Selection", target: nil, action: nil)
+    private let clearSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
+    private let selectionLabel = NSTextField(labelWithString: "Selection: none")
+    private let autoFollowStatusLabel = NSTextField(labelWithString: "Auto-follow: idle")
     private let openButton = NSButton(title: "Open Video", target: nil, action: nil)
     private let openFinderSelectionButton = NSButton(title: "Open Finder Selection", target: nil, action: nil)
     private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse Open Video or Open Finder Selection.")
 
     private var isDraggingSlider = false
     private var escMonitor: Any?
+    private var selectionStart: PlaybackSeconds?
+    private var selectionEnd: PlaybackSeconds?
+    private var currentVideoURL: URL?
     private static let baseWindowTitle = "Quick Preview Video Loop"
+
+    enum FinderSelectionState {
+        case none
+        case nonVideo(URL)
+        case video(URL)
+    }
 
     convenience init() {
         let root = KeyCaptureView(frame: NSRect(x: 0, y: 0, width: 920, height: 640))
@@ -40,7 +55,13 @@ final class MainPlayerWindowController: NSWindowController {
 
     func openVideo(url: URL) {
         showWindow(nil)
-        engine.attach(to: url, autoplay: true)
+        let normalizedURL = url.standardizedFileURL
+        engine.attach(to: normalizedURL, autoplay: true)
+        currentVideoURL = normalizedURL
+        selectionStart = nil
+        selectionEnd = nil
+        replaySelectionButton.state = .off
+        selectionLabel.stringValue = "Selection: none"
         emptyStateLabel.isHidden = true
     }
 
@@ -55,7 +76,7 @@ final class MainPlayerWindowController: NSWindowController {
     @discardableResult
     func openFinderSelectionIfVideo(showErrors: Bool = false) -> Bool {
         do {
-            let fileURL = try selectedFinderFileURL()
+            let fileURL = try selectedFinderFileURL(activateFinder: true)
             guard isVideoURL(fileURL) else {
                 if showErrors {
                     showInfoAlert(
@@ -83,39 +104,76 @@ final class MainPlayerWindowController: NSWindowController {
         }
     }
 
-    private func selectedFinderFileURL() throws -> URL {
-        let script = """
-        tell application "Finder"
-            activate
-            delay 0.2
+    func selectedFinderVideoURL(activateFinder: Bool) -> URL? {
+        guard let fileURL = try? selectedFinderFileURL(activateFinder: activateFinder) else {
+            return nil
+        }
+        guard isVideoURL(fileURL) else {
+            return nil
+        }
+        return fileURL.standardizedFileURL
+    }
 
-            set selectedItems to {}
+    func finderSelectionState(activateFinder: Bool) -> FinderSelectionState {
+        guard let fileURL = try? selectedFinderFileURL(activateFinder: activateFinder) else {
+            return .none
+        }
+        if isVideoURL(fileURL) {
+            return .video(fileURL.standardizedFileURL)
+        }
+        return .nonVideo(fileURL.standardizedFileURL)
+    }
 
-            try
-                set selectedItems to (selection as alias list)
-            end try
+    func loadedVideoURL() -> URL? {
+        currentVideoURL
+    }
 
-            if (count selectedItems) is 0 then
-                try
-                    if (count of Finder windows) > 0 then
-                        set selectedItems to (selection of front Finder window) as alias list
-                    end if
-                end try
-            end if
+    func hasLoadedVideo() -> Bool {
+        currentVideoURL != nil
+    }
 
-            if (count selectedItems) is 0 then
-                try
-                    set selectedItems to (every item of desktop whose selected is true) as alias list
-                end try
-            end if
+    func setAutoFollowStatus(_ message: String) {
+        autoFollowStatusLabel.stringValue = "Auto-follow: \(message)"
+    }
 
-            if (count selectedItems) is 0 then
-                return ""
-            end if
-
-            return POSIX path of (item 1 of selectedItems)
-        end tell
-        """
+    private func selectedFinderFileURL(activateFinder: Bool) throws -> URL {
+        var lines: [String] = [
+            "tell application \"Finder\""
+        ]
+        if activateFinder {
+            lines.append("    activate")
+            lines.append("    delay 0.2")
+        }
+        lines.append(contentsOf: [
+            "    set selectedItems to {}",
+            "",
+            "    try",
+            "        set selectedItems to selection",
+            "    end try",
+            "",
+            "    if (count selectedItems) is 0 then",
+            "        try",
+            "            if (count of Finder windows) > 0 then",
+                "                set selectedItems to (selection of front Finder window)",
+            "            end if",
+            "        end try",
+            "    end if",
+            "",
+            "    if (count selectedItems) is 0 then",
+            "        try",
+                "            set selectedItems to (every item of desktop whose selected is true)",
+            "        end try",
+            "    end if",
+            "",
+            "    if (count selectedItems) is 0 then",
+            "        return \"\"",
+            "    end if",
+            "",
+            "    set firstItem to item 1 of selectedItems",
+            "    return POSIX path of (firstItem as alias)",
+            "end tell"
+        ])
+        let script = lines.joined(separator: "\n")
 
         let result = runAppleScript(script)
         if let code = result.errorCode, code == -1743 || code == -1719 {
@@ -131,6 +189,11 @@ final class MainPlayerWindowController: NSWindowController {
     }
 
     private func runAppleScript(_ source: String) -> (value: String?, errorCode: Int?) {
+        let processResult = runAppleScriptUsingProcess(source)
+        if processResult.errorCode == nil {
+            return processResult
+        }
+
         guard let script = NSAppleScript(source: source) else {
             return (nil, -1)
         }
@@ -138,6 +201,55 @@ final class MainPlayerWindowController: NSWindowController {
         let result = script.executeAndReturnError(&errorInfo)
         let errorCode = errorInfo?[NSAppleScript.errorNumber] as? Int
         return (result.stringValue, errorCode)
+    }
+
+    private func runAppleScriptUsingProcess(_ source: String) -> (value: String?, errorCode: Int?) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+
+        var arguments: [String] = []
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        for line in lines {
+            arguments.append("-e")
+            arguments.append(String(line))
+        }
+        process.arguments = arguments
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return (nil, -1)
+        }
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: outputData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let errorText = String(data: errorData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if process.terminationStatus == 0 {
+            return (output?.isEmpty == false ? output : nil, nil)
+        }
+
+        let parsedCode = parseAppleScriptErrorCode(from: errorText) ?? Int(process.terminationStatus)
+        return (nil, parsedCode)
+    }
+
+    private func parseAppleScriptErrorCode(from errorText: String) -> Int? {
+        guard let match = errorText.range(of: #"\(-?\d+\)"#, options: .regularExpression) else {
+            return nil
+        }
+        let raw = errorText[match]
+            .replacingOccurrences(of: "(", with: "")
+            .replacingOccurrences(of: ")", with: "")
+        return Int(raw)
     }
 
     func presentOpenPanelIfNeeded() {
@@ -163,6 +275,32 @@ final class MainPlayerWindowController: NSWindowController {
         loopButton.target = self
         loopButton.action = #selector(handleLoopToggle(_:))
 
+        setSelectionStartButton.translatesAutoresizingMaskIntoConstraints = false
+        setSelectionStartButton.target = self
+        setSelectionStartButton.action = #selector(handleSetSelectionStart(_:))
+
+        setSelectionEndButton.translatesAutoresizingMaskIntoConstraints = false
+        setSelectionEndButton.target = self
+        setSelectionEndButton.action = #selector(handleSetSelectionEnd(_:))
+
+        replaySelectionButton.translatesAutoresizingMaskIntoConstraints = false
+        replaySelectionButton.target = self
+        replaySelectionButton.action = #selector(handleReplaySelectionToggle(_:))
+
+        clearSelectionButton.translatesAutoresizingMaskIntoConstraints = false
+        clearSelectionButton.target = self
+        clearSelectionButton.action = #selector(handleClearSelection(_:))
+
+        selectionLabel.translatesAutoresizingMaskIntoConstraints = false
+        selectionLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        selectionLabel.textColor = .secondaryLabelColor
+        selectionLabel.lineBreakMode = .byTruncatingTail
+
+        autoFollowStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        autoFollowStatusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        autoFollowStatusLabel.textColor = .secondaryLabelColor
+        autoFollowStatusLabel.lineBreakMode = .byTruncatingTail
+
         openButton.translatesAutoresizingMaskIntoConstraints = false
         openButton.target = self
         openButton.action = #selector(handleOpenVideo(_:))
@@ -176,7 +314,20 @@ final class MainPlayerWindowController: NSWindowController {
         emptyStateLabel.font = .systemFont(ofSize: 20, weight: .medium)
         emptyStateLabel.textColor = .secondaryLabelColor
 
-        let controls = NSStackView(views: [openButton, openFinderSelectionButton, loopButton, timeLabel])
+        let controls = NSStackView(
+            views: [
+                openButton,
+                openFinderSelectionButton,
+                loopButton,
+                setSelectionStartButton,
+                setSelectionEndButton,
+                replaySelectionButton,
+                clearSelectionButton,
+                selectionLabel,
+                autoFollowStatusLabel,
+                timeLabel
+            ]
+        )
         controls.orientation = .horizontal
         controls.alignment = .centerY
         controls.distribution = .fillProportionally
@@ -226,7 +377,17 @@ final class MainPlayerWindowController: NSWindowController {
         }
         engine.onLoopModeUpdate = { [weak self] mode in
             guard let self else { return }
-            self.loopButton.state = mode == .off ? .off : .on
+            switch mode {
+            case .off:
+                self.loopButton.state = .off
+                self.replaySelectionButton.state = .off
+            case .full:
+                self.loopButton.state = .on
+                self.replaySelectionButton.state = .off
+            case .range:
+                self.loopButton.state = .off
+                self.replaySelectionButton.state = .on
+            }
         }
     }
 
@@ -288,6 +449,60 @@ final class MainPlayerWindowController: NSWindowController {
     }
 
     @objc
+    private func handleSetSelectionStart(_ sender: NSButton) {
+        let current = engine.currentTimeSeconds()
+        selectionStart = current
+        if let end = selectionEnd, end < current {
+            selectionEnd = current
+        }
+        updateSelectionLabel()
+        if replaySelectionButton.state == .on {
+            applySelectionReplay()
+        }
+        _ = sender
+    }
+
+    @objc
+    private func handleSetSelectionEnd(_ sender: NSButton) {
+        let current = engine.currentTimeSeconds()
+        selectionEnd = current
+        if let start = selectionStart, start > current {
+            selectionStart = current
+        }
+        updateSelectionLabel()
+        if replaySelectionButton.state == .on {
+            applySelectionReplay()
+        }
+        _ = sender
+    }
+
+    @objc
+    private func handleReplaySelectionToggle(_ sender: NSButton) {
+        if sender.state == .on {
+            guard applySelectionReplay() else {
+                sender.state = .off
+                showInfoAlert(
+                    title: "Selection Not Ready",
+                    message: "Set both selection start and end to replay only that part of the video."
+                )
+                return
+            }
+            return
+        }
+        engine.clearLoop()
+    }
+
+    @objc
+    private func handleClearSelection(_ sender: NSButton) {
+        selectionStart = nil
+        selectionEnd = nil
+        replaySelectionButton.state = .off
+        engine.clearLoop()
+        updateSelectionLabel()
+        _ = sender
+    }
+
+    @objc
     private func handleOpenVideo(_ sender: NSButton) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie]
@@ -330,6 +545,39 @@ final class MainPlayerWindowController: NSWindowController {
             return String(format: "%02d:%02d:%02d", hours, minutes, secs)
         }
         return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    @discardableResult
+    private func applySelectionReplay() -> Bool {
+        guard let range = normalizedSelectionRange() else {
+            return false
+        }
+        engine.setLoopRange(start: range.start, end: range.end)
+        engine.handle(command: .seekTo(seconds: range.start))
+        engine.play()
+        return true
+    }
+
+    private func normalizedSelectionRange() -> (start: PlaybackSeconds, end: PlaybackSeconds)? {
+        guard let start = selectionStart, let end = selectionEnd else {
+            return nil
+        }
+        let lower = min(start, end)
+        let upper = max(start, end)
+        guard upper - lower > 0.001 else {
+            return nil
+        }
+        return (lower, upper)
+    }
+
+    private func updateSelectionLabel() {
+        guard let start = selectionStart, let end = selectionEnd else {
+            selectionLabel.stringValue = "Selection: none"
+            return
+        }
+        let lower = min(start, end)
+        let upper = max(start, end)
+        selectionLabel.stringValue = "Selection: \(Self.format(lower))-\(Self.format(upper))"
     }
 
     private func showInfoAlert(title: String, message: String) {

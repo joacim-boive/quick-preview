@@ -3,6 +3,8 @@ import Cocoa
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyManager = GlobalHotkeyManager()
     private var windowController: MainPlayerWindowController?
+    private var finderSelectionMonitorTimer: DispatchSourceTimer?
+    private var isSelectionCheckInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -12,9 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.window?.makeKeyAndOrderFront(nil)
         controller.window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.windowController?.presentOpenPanelIfNeeded()
-        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             guard let self else { return }
             if !NSApp.windows.contains(where: { $0.isVisible }) {
@@ -49,6 +48,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 message: "No global shortcut could be registered. Open videos using the app window for now."
             )
         }
+
+        startFinderSelectionMonitor()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        finderSelectionMonitorTimer?.cancel()
+        finderSelectionMonitorTimer = nil
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -92,6 +98,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = MainPlayerWindowController()
         windowController = controller
         return controller
+    }
+
+    private func startFinderSelectionMonitor() {
+        finderSelectionMonitorTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        timer.setEventHandler { [weak self] in
+            DispatchQueue.main.async {
+                self?.followFinderSelectionIfNeeded()
+            }
+        }
+        finderSelectionMonitorTimer = timer
+        timer.resume()
+    }
+
+    private func followFinderSelectionIfNeeded() {
+        if isSelectionCheckInProgress {
+            return
+        }
+        isSelectionCheckInProgress = true
+        defer { isSelectionCheckInProgress = false }
+
+        guard let controller = windowController else {
+            return
+        }
+        guard controller.hasLoadedVideo() else {
+            controller.setAutoFollowStatus("waiting for loaded video")
+            return
+        }
+
+        let passiveState = controller.finderSelectionState(activateFinder: false)
+        let state: MainPlayerWindowController.FinderSelectionState
+        switch passiveState {
+        case .none:
+            state = controller.finderSelectionState(activateFinder: true)
+        default:
+            state = passiveState
+        }
+
+        switch state {
+        case .none:
+            controller.setAutoFollowStatus("no Finder selection")
+            return
+        case let .nonVideo(url):
+            controller.setAutoFollowStatus("selected item is not video (\(url.lastPathComponent))")
+            return
+        case let .video(selectedVideoURL):
+            guard selectedVideoURL != controller.loadedVideoURL() else {
+                controller.setAutoFollowStatus("tracking \(selectedVideoURL.lastPathComponent)")
+                return
+            }
+            controller.setAutoFollowStatus("switching to \(selectedVideoURL.lastPathComponent)")
+            controller.openVideo(url: selectedVideoURL)
+            controller.setAutoFollowStatus("playing \(selectedVideoURL.lastPathComponent)")
+            return
+        }
     }
 
     private func showStartupAlert(title: String, message: String) {

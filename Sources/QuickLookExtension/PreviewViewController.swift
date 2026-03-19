@@ -8,11 +8,18 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private let timelineSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let loopButton = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
+    private let setSelectionStartButton = NSButton(title: "Set Start", target: nil, action: nil)
+    private let setSelectionEndButton = NSButton(title: "Set End", target: nil, action: nil)
+    private let replaySelectionButton = NSButton(checkboxWithTitle: "Replay Selection", target: nil, action: nil)
+    private let clearSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
+    private let selectionLabel = NSTextField(labelWithString: "Selection: none")
     private let openInAppButton = NSButton(title: "Open In App", target: nil, action: nil)
 
     private var currentFileURL: URL?
     private var isDraggingSlider = false
     private var eventMonitor: Any?
+    private var selectionStart: PlaybackSeconds?
+    private var selectionEnd: PlaybackSeconds?
 
     override func loadView() {
         view = KeyCaptureView()
@@ -34,6 +41,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
         currentFileURL = url
         engine.attach(to: url, autoplay: true)
+        selectionStart = nil
+        selectionEnd = nil
+        replaySelectionButton.state = .off
+        selectionLabel.stringValue = "Selection: none"
         handler(nil)
     }
 
@@ -60,11 +71,43 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         loopButton.target = self
         loopButton.action = #selector(handleLoopToggle(_:))
 
+        setSelectionStartButton.translatesAutoresizingMaskIntoConstraints = false
+        setSelectionStartButton.target = self
+        setSelectionStartButton.action = #selector(handleSetSelectionStart(_:))
+
+        setSelectionEndButton.translatesAutoresizingMaskIntoConstraints = false
+        setSelectionEndButton.target = self
+        setSelectionEndButton.action = #selector(handleSetSelectionEnd(_:))
+
+        replaySelectionButton.translatesAutoresizingMaskIntoConstraints = false
+        replaySelectionButton.target = self
+        replaySelectionButton.action = #selector(handleReplaySelectionToggle(_:))
+
+        clearSelectionButton.translatesAutoresizingMaskIntoConstraints = false
+        clearSelectionButton.target = self
+        clearSelectionButton.action = #selector(handleClearSelection(_:))
+
+        selectionLabel.translatesAutoresizingMaskIntoConstraints = false
+        selectionLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        selectionLabel.textColor = .secondaryLabelColor
+        selectionLabel.lineBreakMode = .byTruncatingTail
+
         openInAppButton.translatesAutoresizingMaskIntoConstraints = false
         openInAppButton.target = self
         openInAppButton.action = #selector(handleOpenInApp(_:))
 
-        let controls = NSStackView(views: [loopButton, openInAppButton, timeLabel])
+        let controls = NSStackView(
+            views: [
+                loopButton,
+                setSelectionStartButton,
+                setSelectionEndButton,
+                replaySelectionButton,
+                clearSelectionButton,
+                openInAppButton,
+                selectionLabel,
+                timeLabel
+            ]
+        )
         controls.orientation = .horizontal
         controls.distribution = .fillProportionally
         controls.alignment = .centerY
@@ -107,8 +150,13 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             switch mode {
             case .off:
                 self.loopButton.state = .off
-            default:
+                self.replaySelectionButton.state = .off
+            case .full:
                 self.loopButton.state = .on
+                self.replaySelectionButton.state = .off
+            case .range:
+                self.loopButton.state = .off
+                self.replaySelectionButton.state = .on
             }
         }
     }
@@ -166,6 +214,57 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     @objc
+    private func handleSetSelectionStart(_ sender: NSButton) {
+        let current = engine.currentTimeSeconds()
+        selectionStart = current
+        if let end = selectionEnd, end < current {
+            selectionEnd = current
+        }
+        updateSelectionLabel()
+        if replaySelectionButton.state == .on {
+            _ = applySelectionReplay()
+        }
+        _ = sender
+    }
+
+    @objc
+    private func handleSetSelectionEnd(_ sender: NSButton) {
+        let current = engine.currentTimeSeconds()
+        selectionEnd = current
+        if let start = selectionStart, start > current {
+            selectionStart = current
+        }
+        updateSelectionLabel()
+        if replaySelectionButton.state == .on {
+            _ = applySelectionReplay()
+        }
+        _ = sender
+    }
+
+    @objc
+    private func handleReplaySelectionToggle(_ sender: NSButton) {
+        if sender.state == .on {
+            guard applySelectionReplay() else {
+                sender.state = .off
+                NSSound.beep()
+                return
+            }
+            return
+        }
+        engine.clearLoop()
+    }
+
+    @objc
+    private func handleClearSelection(_ sender: NSButton) {
+        selectionStart = nil
+        selectionEnd = nil
+        replaySelectionButton.state = .off
+        engine.clearLoop()
+        updateSelectionLabel()
+        _ = sender
+    }
+
+    @objc
     private func handleOpenInApp(_ sender: NSButton) {
         guard let fileURL = currentFileURL else { return }
         var components = URLComponents()
@@ -193,6 +292,39 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             return String(format: "%02d:%02d:%02d", hours, minutes, secs)
         }
         return String(format: "%02d:%02d", minutes, secs)
+    }
+
+    @discardableResult
+    private func applySelectionReplay() -> Bool {
+        guard let range = normalizedSelectionRange() else {
+            return false
+        }
+        engine.setLoopRange(start: range.start, end: range.end)
+        engine.handle(command: .seekTo(seconds: range.start))
+        engine.play()
+        return true
+    }
+
+    private func normalizedSelectionRange() -> (start: PlaybackSeconds, end: PlaybackSeconds)? {
+        guard let start = selectionStart, let end = selectionEnd else {
+            return nil
+        }
+        let lower = min(start, end)
+        let upper = max(start, end)
+        guard upper - lower > 0.001 else {
+            return nil
+        }
+        return (lower, upper)
+    }
+
+    private func updateSelectionLabel() {
+        guard let start = selectionStart, let end = selectionEnd else {
+            selectionLabel.stringValue = "Selection: none"
+            return
+        }
+        let lower = min(start, end)
+        let upper = max(start, end)
+        selectionLabel.stringValue = "Selection: \(Self.format(lower))-\(Self.format(upper))"
     }
 }
 

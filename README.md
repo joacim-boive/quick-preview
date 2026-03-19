@@ -22,12 +22,21 @@ macOS video preview project that prioritizes Finder Quick Look behavior and adds
 - `Left/Right`: Fine seek (`0.1s`)
 - `Shift+Left/Shift+Right`: Coarse seek (`1.0s`)
 - `Up/Down`: Frame step (+/- one frame, with fine-step fallback)
+- `Set Start` / `Set End`: Mark replay selection points
+- `Replay Selection`: Loop only the marked segment
+- `Clear Selection`: Remove current replay segment
 
 ## Finder-First Behavior
 
 The extension target (`QuickPreviewExtension`) is designed for Finder Quick Look previews, and includes loop + precise navigation controls in its UI.
 
 If extension constraints prevent expected interaction in a given context, the preview offers **Open In App** to hand off to the standalone player.
+
+## Finder Selection Follow
+
+In the standalone app, once a video is loaded, selecting a different video in Finder automatically switches playback to that selected file.
+
+The global shortcut is still available, but no longer required to switch to another Finder-selected video while the player is active.
 
 ## Build Notes
 
