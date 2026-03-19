@@ -1,10 +1,10 @@
 import Cocoa
-import AVKit
+import AVFoundation
 import UniformTypeIdentifiers
 
-final class MainPlayerWindowController: NSWindowController {
+final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
-    private let playerView = AVPlayerView(frame: .zero)
+    private let playerView = PlayerSurfaceView(frame: .zero)
     private let timelineSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let loopButton = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
@@ -13,7 +13,8 @@ final class MainPlayerWindowController: NSWindowController {
     private let replaySelectionButton = NSButton(checkboxWithTitle: "Replay Selection", target: nil, action: nil)
     private let clearSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
     private let selectionLabel = NSTextField(labelWithString: "Selection: none")
-    private let autoFollowStatusLabel = NSTextField(labelWithString: "Auto-follow: idle")
+    private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let fullscreenButton = NSButton(title: "Fullscreen", target: nil, action: nil)
     private let openButton = NSButton(title: "Open Video", target: nil, action: nil)
     private let openFinderSelectionButton = NSButton(title: "Open Finder Selection", target: nil, action: nil)
     private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse Open Video or Open Finder Selection.")
@@ -23,6 +24,7 @@ final class MainPlayerWindowController: NSWindowController {
     private var selectionStart: PlaybackSeconds?
     private var selectionEnd: PlaybackSeconds?
     private var currentVideoURL: URL?
+    private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
 
     enum FinderSelectionState {
@@ -43,6 +45,7 @@ final class MainPlayerWindowController: NSWindowController {
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = root
         self.init(window: window)
+        window.delegate = self
         configureUI(on: root)
         bindEngine()
     }
@@ -58,6 +61,7 @@ final class MainPlayerWindowController: NSWindowController {
         let normalizedURL = url.standardizedFileURL
         engine.attach(to: normalizedURL, autoplay: true)
         currentVideoURL = normalizedURL
+        updateWindowTitle()
         selectionStart = nil
         selectionEnd = nil
         replaySelectionButton.state = .off
@@ -66,11 +70,8 @@ final class MainPlayerWindowController: NSWindowController {
     }
 
     func setShortcutHint(_ shortcut: String) {
-        guard !shortcut.isEmpty else {
-            window?.title = Self.baseWindowTitle
-            return
-        }
-        window?.title = "\(Self.baseWindowTitle) — \(shortcut)"
+        shortcutHintText = shortcut.isEmpty ? nil : shortcut
+        updateWindowTitle()
     }
 
     @discardableResult
@@ -130,10 +131,6 @@ final class MainPlayerWindowController: NSWindowController {
 
     func hasLoadedVideo() -> Bool {
         currentVideoURL != nil
-    }
-
-    func setAutoFollowStatus(_ message: String) {
-        autoFollowStatusLabel.stringValue = "Auto-follow: \(message)"
     }
 
     private func selectedFinderFileURL(activateFinder: Bool) throws -> URL {
@@ -260,8 +257,10 @@ final class MainPlayerWindowController: NSWindowController {
     private func configureUI(on root: KeyCaptureView) {
         guard let content = window?.contentView else { return }
         playerView.translatesAutoresizingMaskIntoConstraints = false
-        playerView.controlsStyle = .floating
         playerView.player = engine.currentPlayer()
+        playerView.clickHandler = { [weak self] in
+            self?.handlePlayerSurfaceClick()
+        }
 
         timelineSlider.translatesAutoresizingMaskIntoConstraints = false
         timelineSlider.target = self
@@ -296,10 +295,16 @@ final class MainPlayerWindowController: NSWindowController {
         selectionLabel.textColor = .secondaryLabelColor
         selectionLabel.lineBreakMode = .byTruncatingTail
 
-        autoFollowStatusLabel.translatesAutoresizingMaskIntoConstraints = false
-        autoFollowStatusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        autoFollowStatusLabel.textColor = .secondaryLabelColor
-        autoFollowStatusLabel.lineBreakMode = .byTruncatingTail
+        volumeSlider.translatesAutoresizingMaskIntoConstraints = false
+        volumeSlider.target = self
+        volumeSlider.action = #selector(handleVolumeChanged(_:))
+        volumeSlider.isContinuous = true
+        volumeSlider.doubleValue = Double(engine.currentPlayer().volume)
+
+        fullscreenButton.translatesAutoresizingMaskIntoConstraints = false
+        fullscreenButton.target = self
+        fullscreenButton.action = #selector(handleToggleFullscreen(_:))
+        updateFullscreenButtonTitle()
 
         openButton.translatesAutoresizingMaskIntoConstraints = false
         openButton.target = self
@@ -314,7 +319,7 @@ final class MainPlayerWindowController: NSWindowController {
         emptyStateLabel.font = .systemFont(ofSize: 20, weight: .medium)
         emptyStateLabel.textColor = .secondaryLabelColor
 
-        let controls = NSStackView(
+        let topControls = NSStackView(
             views: [
                 openButton,
                 openFinderSelectionButton,
@@ -323,15 +328,35 @@ final class MainPlayerWindowController: NSWindowController {
                 setSelectionEndButton,
                 replaySelectionButton,
                 clearSelectionButton,
+                fullscreenButton
+            ]
+        )
+        topControls.orientation = .horizontal
+        topControls.alignment = .centerY
+        topControls.distribution = .fill
+        topControls.spacing = 10
+        topControls.translatesAutoresizingMaskIntoConstraints = false
+
+        selectionLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let bottomControls = NSStackView(
+            views: [
                 selectionLabel,
-                autoFollowStatusLabel,
+                volumeSlider,
                 timeLabel
             ]
         )
-        controls.orientation = .horizontal
-        controls.alignment = .centerY
-        controls.distribution = .fillProportionally
-        controls.spacing = 10
+        bottomControls.orientation = .horizontal
+        bottomControls.alignment = .centerY
+        bottomControls.distribution = .fill
+        bottomControls.spacing = 10
+        bottomControls.translatesAutoresizingMaskIntoConstraints = false
+
+        let controls = NSStackView(views: [topControls, bottomControls])
+        controls.orientation = .vertical
+        controls.alignment = .leading
+        controls.distribution = .fillEqually
+        controls.spacing = 8
         controls.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(playerView)
@@ -358,7 +383,9 @@ final class MainPlayerWindowController: NSWindowController {
             emptyStateLabel.centerXAnchor.constraint(equalTo: playerView.centerXAnchor),
             emptyStateLabel.centerYAnchor.constraint(equalTo: playerView.centerYAnchor),
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: playerView.leadingAnchor, constant: 16),
-            emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: playerView.trailingAnchor, constant: -16)
+            emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: playerView.trailingAnchor, constant: -16),
+
+            volumeSlider.widthAnchor.constraint(equalToConstant: 160)
         ])
 
         root.keyHandler = { [weak self] event in
@@ -392,6 +419,11 @@ final class MainPlayerWindowController: NSWindowController {
     }
 
     private func handleKey(event: NSEvent) {
+        if event.modifierFlags.contains(.command), event.keyCode == 12 {
+            NSApp.terminate(nil)
+            return
+        }
+
         let isShift = event.modifierFlags.contains(.shift)
         switch event.keyCode {
         case 53:
@@ -431,6 +463,10 @@ final class MainPlayerWindowController: NSWindowController {
     }
 
     private func closePreviewWindow() {
+        if window?.styleMask.contains(.fullScreen) == true {
+            window?.toggleFullScreen(nil)
+            return
+        }
         engine.pause()
         window?.orderOut(nil)
     }
@@ -520,6 +556,24 @@ final class MainPlayerWindowController: NSWindowController {
         _ = openFinderSelectionIfVideo(showErrors: true)
     }
 
+    @objc
+    private func handleVolumeChanged(_ sender: NSSlider) {
+        engine.currentPlayer().volume = Float(sender.doubleValue)
+    }
+
+    @objc
+    private func handleToggleFullscreen(_ sender: NSButton) {
+        window?.toggleFullScreen(sender)
+    }
+
+    private func handlePlayerSurfaceClick() {
+        guard engine.currentPlayer().currentItem != nil else { return }
+        let wasPlaying = engine.currentPlayer().rate != 0
+        engine.handle(command: .togglePlayPause)
+        let symbolName = wasPlaying ? "pause.fill" : "play.fill"
+        playerView.flashPlaybackIndicator(symbolName: symbolName)
+    }
+
     private func isVideoURL(_ url: URL) -> Bool {
         do {
             let values = try url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
@@ -533,6 +587,39 @@ final class MainPlayerWindowController: NSWindowController {
             return false
         }
         return false
+    }
+
+    private func updateWindowTitle() {
+        if let currentVideoURL {
+            window?.title = currentVideoURL.lastPathComponent
+            return
+        }
+        if let shortcutHintText {
+            window?.title = shortcutHintText
+            return
+        }
+        window?.title = Self.baseWindowTitle
+    }
+
+    private func updateFullscreenButtonTitle() {
+        if window?.styleMask.contains(.fullScreen) == true {
+            fullscreenButton.title = "Exit Fullscreen"
+            return
+        }
+        fullscreenButton.title = "Fullscreen"
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        updateFullscreenButtonTitle()
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        updateFullscreenButtonTitle()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        engine.pause()
+        return true
     }
 
     private static func format(_ seconds: PlaybackSeconds) -> String {
@@ -615,5 +702,104 @@ private enum FinderSelectionError: Error {
         case let .noSelectionWithDetails(details):
             return "Finder did not report a selected file. Select one file in Finder and try again.\n\nDiagnostics: \(details)"
         }
+    }
+}
+
+private final class PlayerSurfaceView: NSView {
+    private let playerLayer = AVPlayerLayer()
+    private let playbackIndicatorContainer = NSVisualEffectView()
+    private let playbackIndicatorImageView = NSImageView()
+    private var hideIndicatorWorkItem: DispatchWorkItem?
+
+    var clickHandler: (() -> Void)?
+
+    var player: AVPlayer? {
+        get { playerLayer.player }
+        set { playerLayer.player = newValue }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        let rootLayer = CALayer()
+        rootLayer.backgroundColor = NSColor.black.cgColor
+        layer = rootLayer
+        playerLayer.videoGravity = .resizeAspect
+        rootLayer.addSublayer(playerLayer)
+
+        playbackIndicatorContainer.translatesAutoresizingMaskIntoConstraints = false
+        playbackIndicatorContainer.material = .hudWindow
+        playbackIndicatorContainer.blendingMode = .withinWindow
+        playbackIndicatorContainer.state = .active
+        playbackIndicatorContainer.wantsLayer = true
+        playbackIndicatorContainer.layer?.cornerRadius = 34
+        playbackIndicatorContainer.layer?.masksToBounds = true
+        playbackIndicatorContainer.alphaValue = 0
+        playbackIndicatorContainer.isHidden = true
+
+        playbackIndicatorImageView.translatesAutoresizingMaskIntoConstraints = false
+        playbackIndicatorImageView.imageScaling = .scaleProportionallyUpOrDown
+        playbackIndicatorImageView.contentTintColor = .white
+        playbackIndicatorContainer.addSubview(playbackIndicatorImageView)
+        addSubview(playbackIndicatorContainer)
+
+        NSLayoutConstraint.activate([
+            playbackIndicatorContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
+            playbackIndicatorContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
+            playbackIndicatorContainer.widthAnchor.constraint(equalToConstant: 68),
+            playbackIndicatorContainer.heightAnchor.constraint(equalToConstant: 68),
+
+            playbackIndicatorImageView.centerXAnchor.constraint(equalTo: playbackIndicatorContainer.centerXAnchor),
+            playbackIndicatorImageView.centerYAnchor.constraint(equalTo: playbackIndicatorContainer.centerYAnchor),
+            playbackIndicatorImageView.widthAnchor.constraint(equalToConstant: 34),
+            playbackIndicatorImageView.heightAnchor.constraint(equalToConstant: 34)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        playerLayer.frame = bounds
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        clickHandler?()
+        super.mouseUp(with: event)
+    }
+
+    func flashPlaybackIndicator(symbolName: String) {
+        guard
+            let image = NSImage(
+                systemSymbolName: symbolName,
+                accessibilityDescription: nil
+            )?.withSymbolConfiguration(.init(pointSize: 34, weight: .medium))
+        else {
+            return
+        }
+
+        hideIndicatorWorkItem?.cancel()
+        playbackIndicatorImageView.image = image
+        playbackIndicatorContainer.isHidden = false
+        playbackIndicatorContainer.alphaValue = 0
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            playbackIndicatorContainer.animator().alphaValue = 1
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                self.playbackIndicatorContainer.animator().alphaValue = 0
+            } completionHandler: {
+                self.playbackIndicatorContainer.isHidden = true
+            }
+        }
+        hideIndicatorWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
     }
 }

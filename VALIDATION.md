@@ -4,7 +4,6 @@
 
 - Project structure and target separation were created:
   - App target source files
-  - Quick Look extension source files
   - Shared playback module
 - Shared playback logic includes:
   - Full-loop mode
@@ -16,19 +15,12 @@
 
 The project now builds successfully with Xcode CLI:
 
-- `xcodebuild -list -project "QuickPreview.xcodeproj"` succeeds and shows both targets/schemes.
+- `xcodebuild -list -project "QuickPreview.xcodeproj"` succeeds and shows the standalone app scheme.
 - `xcodebuild -project "QuickPreview.xcodeproj" -scheme "QuickPreview" ... build` succeeds.
-- `xcodebuild -project "QuickPreview.xcodeproj" -scheme "QuickPreviewExtension" ... build` succeeds.
 
 Built artifacts were produced at:
 
 - `build/Build/Products/Debug/QuickPreview.app`
-- `build/Build/Products/Debug/QuickPreviewExtension.appex`
-
-One packaging issue was found and fixed during validation:
-
-- The extension bundle identifier must be prefixed by the parent app bundle identifier.
-- Updated extension identifier to `com.quickpreview.app.extension`.
 
 ## Manual Runtime Validation Checklist
 
@@ -43,15 +35,7 @@ One packaging issue was found and fixed during validation:
    - Arrow keys fine/coarse seek
    - Up/Down frame-step
    - Slider precision and smooth playback after repeated seeks
-4. Test extension in Finder Quick Look:
-   - Trigger preview with Space
-   - Confirm loop toggle and precise navigation behavior
-5. Validate extension fallback:
-   - Open In App handoff loads the same file in standalone player.
 
 ## Known Constraints
 
-- Quick Look extension interaction behavior can vary by macOS security/signing context.
-- In debug/unsigned builds, extension discovery can be inconsistent (`pluginkit` may not list the extension even when the app embeds it).
-- For standard video UTIs (for example MP4/MOV), macOS may continue to use the system preview pipeline, so custom extension UI might not appear for every Finder preview scenario.
 - Global hotkey uses `Ctrl+Space` in fallback app; users may need to adjust if this conflicts with system input-source shortcuts.

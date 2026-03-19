@@ -124,7 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         guard controller.hasLoadedVideo() else {
-            controller.setAutoFollowStatus("waiting for loaded video")
             return
         }
 
@@ -139,19 +138,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch state {
         case .none:
-            controller.setAutoFollowStatus("no Finder selection")
             return
-        case let .nonVideo(url):
-            controller.setAutoFollowStatus("selected item is not video (\(url.lastPathComponent))")
+        case .nonVideo:
             return
         case let .video(selectedVideoURL):
             guard selectedVideoURL != controller.loadedVideoURL() else {
-                controller.setAutoFollowStatus("tracking \(selectedVideoURL.lastPathComponent)")
                 return
             }
-            controller.setAutoFollowStatus("switching to \(selectedVideoURL.lastPathComponent)")
             controller.openVideo(url: selectedVideoURL)
-            controller.setAutoFollowStatus("playing \(selectedVideoURL.lastPathComponent)")
             return
         }
     }
