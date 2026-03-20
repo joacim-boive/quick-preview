@@ -5,30 +5,33 @@ import UniformTypeIdentifiers
 final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
     private let playerView = PlayerSurfaceView(frame: .zero)
-    private let timelineSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let loopButton = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
-    private let setSelectionStartButton = NSButton(title: "Set Start", target: nil, action: nil)
-    private let setSelectionEndButton = NSButton(title: "Set End", target: nil, action: nil)
-    private let replaySelectionButton = NSButton(checkboxWithTitle: "Replay Selection", target: nil, action: nil)
-    private let clearSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
-    private let selectionLabel = NSTextField(labelWithString: "Selection: none")
     private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let rotationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let fullscreenButton = NSButton(title: "Fullscreen", target: nil, action: nil)
     private let openFinderSelectionButton = NSButton(title: "Open Finder Selection", target: nil, action: nil)
     private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse File > Open... or Open Finder Selection.")
 
-    private var isDraggingSlider = false
     private var escMonitor: Any?
-    private var selectionStart: PlaybackSeconds?
-    private var selectionEnd: PlaybackSeconds?
+    private var selectionStart: PlaybackSeconds = 0
+    private var selectionEnd: PlaybackSeconds = 0
     private var currentVideoURL: URL?
     private var currentRotationDegrees = 0
+    private var hasStoredSelectionForCurrentClip = false
+    private var lastKnownDuration: PlaybackSeconds = 0
+    private var wasPlayingBeforePlayheadDrag = false
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
     private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
+    private static let clipSelectionDefaultsKey = "clipSelectionByPath"
     private let allowedRotationDegrees = [0, 90, 180, 270]
+
+    private struct ClipSelection: Codable {
+        let start: PlaybackSeconds
+        let end: PlaybackSeconds
+    }
 
     enum FinderSelectionState {
         case none
@@ -64,15 +67,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let normalizedURL = url.standardizedFileURL
         engine.attach(to: normalizedURL, autoplay: true)
         currentVideoURL = normalizedURL
+        lastKnownDuration = 0
         let storedRotation = storedRotationDegrees(for: normalizedURL)
         applyRotationDegrees(storedRotation)
         rotationPopup.isEnabled = true
         updateWindowTitle()
-        selectionStart = nil
-        selectionEnd = nil
-        replaySelectionButton.state = .off
-        selectionLabel.stringValue = "Selection: none"
+        restoreSelection(for: normalizedURL, duration: engine.currentDurationSeconds())
+        loopButton.state = .off
         emptyStateLabel.isHidden = true
+        updateControlState(hasVideo: true)
     }
 
     func setShortcutHint(_ shortcut: String) {
@@ -280,9 +283,35 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             self?.handlePlayerSurfaceClick()
         }
 
-        timelineSlider.translatesAutoresizingMaskIntoConstraints = false
-        timelineSlider.target = self
-        timelineSlider.action = #selector(handleSliderChanged(_:))
+        inlineTimelineView.translatesAutoresizingMaskIntoConstraints = false
+        inlineTimelineView.onSeekBegan = { [weak self] in
+            guard let self else { return }
+            self.wasPlayingBeforePlayheadDrag = self.engine.currentPlayer().rate != 0
+            if self.wasPlayingBeforePlayheadDrag {
+                self.engine.pause()
+            }
+            self.engine.beginScrubbing()
+        }
+        inlineTimelineView.onSeekChanged = { [weak self] seconds in
+            guard let self else { return }
+            self.engine.scrub(to: seconds)
+            let duration = max(self.engine.currentDurationSeconds(), 0)
+            self.timeLabel.stringValue = "\(Self.format(seconds)) / \(Self.format(duration))"
+        }
+        inlineTimelineView.onSeekEnded = { [weak self] seconds in
+            guard let self else { return }
+            self.engine.endScrubbing(at: seconds)
+            if self.wasPlayingBeforePlayheadDrag {
+                self.engine.play()
+            }
+            self.wasPlayingBeforePlayheadDrag = false
+        }
+        inlineTimelineView.onSelectionChange = { [weak self] start, end in
+            self?.handleInlineSelectionChange(start: start, end: end, shouldCommit: false)
+        }
+        inlineTimelineView.onSelectionCommit = { [weak self] start, end in
+            self?.handleInlineSelectionChange(start: start, end: end, shouldCommit: true)
+        }
 
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -291,27 +320,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         loopButton.translatesAutoresizingMaskIntoConstraints = false
         loopButton.target = self
         loopButton.action = #selector(handleLoopToggle(_:))
-
-        setSelectionStartButton.translatesAutoresizingMaskIntoConstraints = false
-        setSelectionStartButton.target = self
-        setSelectionStartButton.action = #selector(handleSetSelectionStart(_:))
-
-        setSelectionEndButton.translatesAutoresizingMaskIntoConstraints = false
-        setSelectionEndButton.target = self
-        setSelectionEndButton.action = #selector(handleSetSelectionEnd(_:))
-
-        replaySelectionButton.translatesAutoresizingMaskIntoConstraints = false
-        replaySelectionButton.target = self
-        replaySelectionButton.action = #selector(handleReplaySelectionToggle(_:))
-
-        clearSelectionButton.translatesAutoresizingMaskIntoConstraints = false
-        clearSelectionButton.target = self
-        clearSelectionButton.action = #selector(handleClearSelection(_:))
-
-        selectionLabel.translatesAutoresizingMaskIntoConstraints = false
-        selectionLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        selectionLabel.textColor = .secondaryLabelColor
-        selectionLabel.lineBreakMode = .byTruncatingTail
 
         volumeSlider.translatesAutoresizingMaskIntoConstraints = false
         volumeSlider.target = self
@@ -345,10 +353,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             views: [
                 openFinderSelectionButton,
                 loopButton,
-                setSelectionStartButton,
-                setSelectionEndButton,
-                replaySelectionButton,
-                clearSelectionButton,
                 rotationPopup,
                 fullscreenButton
             ]
@@ -359,11 +363,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         topControls.spacing = 10
         topControls.translatesAutoresizingMaskIntoConstraints = false
 
-        selectionLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
         let bottomControls = NSStackView(
             views: [
-                selectionLabel,
                 volumeSlider,
                 timeLabel
             ]
@@ -377,13 +378,13 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let controls = NSStackView(views: [topControls, bottomControls])
         controls.orientation = .vertical
         controls.alignment = .leading
-        controls.distribution = .fillEqually
+        controls.distribution = .fill
         controls.spacing = 8
         controls.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(playerView)
         content.addSubview(emptyStateLabel)
-        content.addSubview(timelineSlider)
+        content.addSubview(inlineTimelineView)
         content.addSubview(controls)
 
         NSLayoutConstraint.activate([
@@ -391,11 +392,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             playerView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
-            timelineSlider.topAnchor.constraint(equalTo: playerView.bottomAnchor, constant: 10),
-            timelineSlider.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            timelineSlider.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            inlineTimelineView.topAnchor.constraint(equalTo: playerView.bottomAnchor, constant: 10),
+            inlineTimelineView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            inlineTimelineView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            inlineTimelineView.heightAnchor.constraint(equalToConstant: 58),
 
-            controls.topAnchor.constraint(equalTo: timelineSlider.bottomAnchor, constant: 8),
+            controls.topAnchor.constraint(equalTo: inlineTimelineView.bottomAnchor, constant: 8),
             controls.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             controls.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             controls.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
@@ -406,9 +408,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             emptyStateLabel.centerYAnchor.constraint(equalTo: playerView.centerYAnchor),
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: playerView.leadingAnchor, constant: 16),
             emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: playerView.trailingAnchor, constant: -16),
-
             volumeSlider.widthAnchor.constraint(equalToConstant: 160)
         ])
+
+        updateControlState(hasVideo: false)
 
         root.keyHandler = { [weak self] event in
             self?.handleKey(event: event)
@@ -419,8 +422,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private func bindEngine() {
         engine.onPositionUpdate = { [weak self] position in
             guard let self else { return }
-            if !self.isDraggingSlider {
-                self.timelineSlider.doubleValue = position.progress
+            if abs(position.duration - self.lastKnownDuration) > 0.01 {
+                self.lastKnownDuration = position.duration
+                self.synchronizeSelectionState(for: position.duration)
+            }
+            if !self.inlineTimelineView.isDraggingPlayhead {
+                self.inlineTimelineView.currentPosition = position.seconds
             }
             self.timeLabel.stringValue = "\(Self.format(position.seconds)) / \(Self.format(position.duration))"
         }
@@ -429,13 +436,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             switch mode {
             case .off:
                 self.loopButton.state = .off
-                self.replaySelectionButton.state = .off
             case .full:
                 self.loopButton.state = .on
-                self.replaySelectionButton.state = .off
             case .range:
-                self.loopButton.state = .off
-                self.replaySelectionButton.state = .on
+                self.loopButton.state = .on
             }
         }
     }
@@ -453,7 +457,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         case 49:
             engine.handle(command: .togglePlayPause)
         case 37:
-            engine.handle(command: .toggleLoop)
+            toggleSelectedLoop()
         case 123:
             let amount = isShift ? engine.coarseStepAmount() : engine.fineStepAmount()
             engine.handle(command: .seekBy(seconds: -amount))
@@ -494,54 +498,13 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc
-    private func handleSliderChanged(_ sender: NSSlider) {
-        let duration = engine.currentDurationSeconds()
-        isDraggingSlider = true
-        engine.handle(command: .seekTo(seconds: sender.doubleValue * duration))
-        isDraggingSlider = false
-    }
-
-    @objc
     private func handleLoopToggle(_ sender: NSButton) {
-        engine.setLoopFull(enabled: sender.state == .on)
-    }
-
-    @objc
-    private func handleSetSelectionStart(_ sender: NSButton) {
-        let current = engine.currentTimeSeconds()
-        selectionStart = current
-        if let end = selectionEnd, end < current {
-            selectionEnd = current
-        }
-        updateSelectionLabel()
-        if replaySelectionButton.state == .on {
-            applySelectionReplay()
-        }
-        _ = sender
-    }
-
-    @objc
-    private func handleSetSelectionEnd(_ sender: NSButton) {
-        let current = engine.currentTimeSeconds()
-        selectionEnd = current
-        if let start = selectionStart, start > current {
-            selectionStart = current
-        }
-        updateSelectionLabel()
-        if replaySelectionButton.state == .on {
-            applySelectionReplay()
-        }
-        _ = sender
-    }
-
-    @objc
-    private func handleReplaySelectionToggle(_ sender: NSButton) {
         if sender.state == .on {
-            guard applySelectionReplay() else {
+            guard applySelectedLoop(shouldStartPlayback: true) else {
                 sender.state = .off
                 showInfoAlert(
                     title: "Selection Not Ready",
-                    message: "Set both selection start and end to replay only that part of the video."
+                    message: "Adjust the start and end scrubbers so the selected segment has some duration before looping."
                 )
                 return
             }
@@ -550,14 +513,14 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.clearLoop()
     }
 
-    @objc
-    private func handleClearSelection(_ sender: NSButton) {
-        selectionStart = nil
-        selectionEnd = nil
-        replaySelectionButton.state = .off
-        engine.clearLoop()
-        updateSelectionLabel()
-        _ = sender
+    private func handleInlineSelectionChange(start: PlaybackSeconds, end: PlaybackSeconds, shouldCommit: Bool) {
+        let duration = engine.currentDurationSeconds()
+        selectionStart = start
+        selectionEnd = end
+        synchronizeSelectionState(for: duration)
+        guard shouldCommit else { return }
+        refreshLoopForUpdatedSelection(shouldSeekIntoRange: true)
+        persistCurrentSelectionIfNeeded()
     }
 
     @objc
@@ -649,6 +612,56 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         defaults.set(raw, forKey: Self.clipRotationDefaultsKey)
     }
 
+    private func storedSelection(for url: URL) -> ClipSelection? {
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: Self.clipSelectionDefaultsKey) else {
+            return nil
+        }
+        do {
+            let raw = try JSONDecoder().decode([String: ClipSelection].self, from: data)
+            return raw[url.path]
+        } catch {
+            return nil
+        }
+    }
+
+    private func storeSelection(_ selection: ClipSelection, for url: URL) {
+        let defaults = UserDefaults.standard
+        let existing: [String: ClipSelection]
+        if let data = defaults.data(forKey: Self.clipSelectionDefaultsKey),
+           let decoded = try? JSONDecoder().decode([String: ClipSelection].self, from: data) {
+            existing = decoded
+        } else {
+            existing = [:]
+        }
+
+        var updated = existing
+        updated[url.path] = selection
+
+        if let data = try? JSONEncoder().encode(updated) {
+            defaults.set(data, forKey: Self.clipSelectionDefaultsKey)
+        }
+    }
+
+    private func restoreSelection(for url: URL, duration: PlaybackSeconds) {
+        let clampedDuration = max(duration, 0)
+        if let stored = storedSelection(for: url) {
+            hasStoredSelectionForCurrentClip = true
+            selectionStart = max(stored.start, 0)
+            if clampedDuration > 0 {
+                selectionEnd = min(max(stored.end, selectionStart), clampedDuration)
+            } else {
+                selectionEnd = max(stored.end, selectionStart)
+            }
+        } else {
+            hasStoredSelectionForCurrentClip = false
+            selectionStart = 0
+            selectionEnd = clampedDuration
+        }
+
+        synchronizeSelectionState(for: clampedDuration)
+    }
+
     private func updateFullscreenButtonTitle() {
         if window?.styleMask.contains(.fullScreen) == true {
             fullscreenButton.title = "Exit Fullscreen"
@@ -683,36 +696,88 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @discardableResult
-    private func applySelectionReplay() -> Bool {
+    private func applySelectedLoop(shouldStartPlayback: Bool) -> Bool {
         guard let range = normalizedSelectionRange() else {
             return false
         }
         engine.setLoopRange(start: range.start, end: range.end)
-        engine.handle(command: .seekTo(seconds: range.start))
-        engine.play()
+        if shouldStartPlayback {
+            engine.handle(command: .seekTo(seconds: range.start))
+            engine.play()
+        }
         return true
     }
 
     private func normalizedSelectionRange() -> (start: PlaybackSeconds, end: PlaybackSeconds)? {
-        guard let start = selectionStart, let end = selectionEnd else {
+        let duration = engine.currentDurationSeconds()
+        guard duration > 0 else {
             return nil
         }
-        let lower = min(start, end)
-        let upper = max(start, end)
+        let lower = min(max(selectionStart, 0), duration)
+        let upper = min(max(selectionEnd, lower), duration)
         guard upper - lower > 0.001 else {
             return nil
         }
         return (lower, upper)
     }
 
-    private func updateSelectionLabel() {
-        guard let start = selectionStart, let end = selectionEnd else {
-            selectionLabel.stringValue = "Selection: none"
+    private func synchronizeSelectionState(for duration: PlaybackSeconds) {
+        let clampedDuration = max(duration, 0)
+        if clampedDuration <= 0 {
+            inlineTimelineView.duration = 1
+            inlineTimelineView.currentPosition = min(max(engine.currentTimeSeconds(), 0), 1)
+            inlineTimelineView.selectionStart = min(max(selectionStart, 0), 1)
+            inlineTimelineView.selectionEnd = min(max(selectionEnd, 0), 1)
             return
         }
-        let lower = min(start, end)
-        let upper = max(start, end)
-        selectionLabel.stringValue = "Selection: \(Self.format(lower))-\(Self.format(upper))"
+
+        if !hasStoredSelectionForCurrentClip && clampedDuration > 0 && selectionEnd <= 0 {
+            selectionEnd = clampedDuration
+        }
+
+        selectionStart = min(max(selectionStart, 0), clampedDuration)
+        selectionEnd = min(max(selectionEnd, selectionStart), clampedDuration)
+
+        inlineTimelineView.duration = clampedDuration
+        inlineTimelineView.selectionStart = selectionStart
+        inlineTimelineView.selectionEnd = selectionEnd
+    }
+
+    private func persistCurrentSelectionIfNeeded() {
+        guard let currentVideoURL, let range = normalizedSelectionRange() else {
+            return
+        }
+        hasStoredSelectionForCurrentClip = true
+        storeSelection(ClipSelection(start: range.start, end: range.end), for: currentVideoURL)
+    }
+
+    private func refreshLoopForUpdatedSelection(shouldSeekIntoRange: Bool) {
+        guard loopButton.state == .on else { return }
+        guard applySelectedLoop(shouldStartPlayback: false) else {
+            engine.clearLoop()
+            return
+        }
+
+        let current = engine.currentTimeSeconds()
+        if shouldSeekIntoRange, let range = normalizedSelectionRange(), current < range.start || current > range.end {
+            engine.handle(command: .seekTo(seconds: range.start))
+        }
+    }
+
+    private func toggleSelectedLoop() {
+        if loopButton.state == .on {
+            loopButton.state = .off
+            engine.clearLoop()
+            return
+        }
+
+        loopButton.state = .on
+        handleLoopToggle(loopButton)
+    }
+
+    private func updateControlState(hasVideo: Bool) {
+        inlineTimelineView.isControlEnabled = hasVideo
+        loopButton.isEnabled = hasVideo
     }
 
     private func showInfoAlert(title: String, message: String) {
@@ -722,6 +787,264 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+private final class InlineSelectionTimelineView: NSView {
+    enum DragTarget {
+        case playhead
+        case startHandle
+        case endHandle
+    }
+
+    var duration: PlaybackSeconds = 1 {
+        didSet { updateLayerFrames() }
+    }
+
+    var currentPosition: PlaybackSeconds = 0 {
+        didSet { updateLayerFrames() }
+    }
+
+    var selectionStart: PlaybackSeconds = 0 {
+        didSet { updateLayerFrames() }
+    }
+
+    var selectionEnd: PlaybackSeconds = 1 {
+        didSet { updateLayerFrames() }
+    }
+
+    var onSeekChanged: ((PlaybackSeconds) -> Void)?
+    var onSeekEnded: ((PlaybackSeconds) -> Void)?
+    var onSeekBegan: (() -> Void)?
+    var onSelectionChange: ((PlaybackSeconds, PlaybackSeconds) -> Void)?
+    var onSelectionCommit: ((PlaybackSeconds, PlaybackSeconds) -> Void)?
+
+    var isDraggingPlayhead: Bool {
+        dragTarget == .playhead
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    var isControlEnabled: Bool = true {
+        didSet {
+            updateAppearance()
+        }
+    }
+
+    private var dragTarget: DragTarget?
+    private let trackLayer = CALayer()
+    private let selectionLayer = CALayer()
+    private let playheadLayer = CALayer()
+    private let startHandleLayer = CALayer()
+    private let endHandleLayer = CALayer()
+    private let startBadgeLayer = CALayer()
+    private let endBadgeLayer = CALayer()
+    private let startBadgeTextLayer = CATextLayer()
+    private let endBadgeTextLayer = CATextLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        configureLayers()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        updateLayerFrames()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isControlEnabled else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        dragTarget = resolvedDragTarget(for: point)
+        if dragTarget == .playhead {
+            onSeekBegan?()
+        }
+        updateDrag(with: point)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard dragTarget != nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        updateDrag(with: point)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard dragTarget != nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        updateDrag(with: point, isFinal: true)
+        dragTarget = nil
+    }
+
+    private func configureLayers() {
+        guard let rootLayer = layer else { return }
+
+        trackLayer.cornerRadius = 4
+        selectionLayer.cornerRadius = 4
+        playheadLayer.cornerRadius = 2
+        startHandleLayer.cornerRadius = 8
+        endHandleLayer.cornerRadius = 8
+        startBadgeLayer.cornerRadius = 6
+        endBadgeLayer.cornerRadius = 6
+
+        [trackLayer, selectionLayer, playheadLayer, startHandleLayer, endHandleLayer, startBadgeLayer, endBadgeLayer].forEach {
+            $0.actions = [
+                "position": NSNull(),
+                "bounds": NSNull(),
+                "frame": NSNull(),
+                "backgroundColor": NSNull(),
+                "cornerRadius": NSNull()
+            ]
+            rootLayer.addSublayer($0)
+        }
+
+        configureBadgeTextLayer(startBadgeTextLayer, title: "A")
+        configureBadgeTextLayer(endBadgeTextLayer, title: "B")
+        startBadgeLayer.addSublayer(startBadgeTextLayer)
+        endBadgeLayer.addSublayer(endBadgeTextLayer)
+        updateAppearance()
+    }
+
+    private func configureBadgeTextLayer(_ textLayer: CATextLayer, title: String) {
+        textLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        textLayer.alignmentMode = .center
+        textLayer.fontSize = 12
+        textLayer.font = NSFont.systemFont(ofSize: 12, weight: .bold)
+        textLayer.foregroundColor = NSColor.white.cgColor
+        textLayer.string = title
+        textLayer.actions = [
+            "position": NSNull(),
+            "bounds": NSNull(),
+            "frame": NSNull(),
+            "contents": NSNull()
+        ]
+    }
+
+    private func updateAppearance() {
+        trackLayer.backgroundColor = NSColor(calibratedRed: 0.18, green: 0.45, blue: 0.91, alpha: isControlEnabled ? 0.45 : 0.2).cgColor
+        selectionLayer.backgroundColor = NSColor(calibratedRed: 0.27, green: 0.58, blue: 0.98, alpha: isControlEnabled ? 0.95 : 0.35).cgColor
+        playheadLayer.backgroundColor = NSColor.white.withAlphaComponent(isControlEnabled ? 0.95 : 0.5).cgColor
+        startHandleLayer.backgroundColor = NSColor(calibratedWhite: 0.88, alpha: isControlEnabled ? 1 : 0.45).cgColor
+        endHandleLayer.backgroundColor = NSColor(calibratedWhite: 0.88, alpha: isControlEnabled ? 1 : 0.45).cgColor
+        startHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? 0.2 : 0.1).cgColor
+        endHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? 0.2 : 0.1).cgColor
+        startHandleLayer.borderWidth = 1
+        endHandleLayer.borderWidth = 1
+        startBadgeLayer.backgroundColor = NSColor(calibratedRed: 0.27, green: 0.58, blue: 0.98, alpha: isControlEnabled ? 0.95 : 0.35).cgColor
+        endBadgeLayer.backgroundColor = NSColor(calibratedRed: 0.27, green: 0.58, blue: 0.98, alpha: isControlEnabled ? 0.95 : 0.35).cgColor
+    }
+
+    private func updateLayerFrames() {
+        let trackRect = self.trackRect
+        trackLayer.frame = CGRect(x: trackRect.minX, y: trackRect.minY, width: max(trackRect.width, 0), height: trackRect.height)
+        selectionLayer.frame = CGRect(
+            x: min(startX, endX),
+            y: trackRect.minY,
+            width: abs(endX - startX),
+            height: trackRect.height
+        )
+
+        playheadLayer.frame = CGRect(x: xPosition(for: currentPosition) - 2, y: 1, width: 4, height: 18)
+        startHandleLayer.frame = handleRect(at: startX)
+        endHandleLayer.frame = handleRect(at: endX)
+        startBadgeLayer.frame = labelRect(at: startX)
+        endBadgeLayer.frame = labelRect(at: endX)
+        startBadgeTextLayer.frame = startBadgeLayer.bounds.insetBy(dx: 0, dy: 3)
+        endBadgeTextLayer.frame = endBadgeLayer.bounds.insetBy(dx: 0, dy: 3)
+    }
+
+    private var trackRect: CGRect {
+        CGRect(x: 18, y: 8, width: max(bounds.width - 36, 0), height: 8)
+    }
+
+    private var startX: CGFloat {
+        xPosition(for: selectionStart)
+    }
+
+    private var endX: CGFloat {
+        xPosition(for: selectionEnd)
+    }
+
+    private func xPosition(for value: PlaybackSeconds) -> CGFloat {
+        guard duration > 0 else { return trackRect.minX }
+        let progress = min(max(value / duration, 0), 1)
+        return trackRect.minX + (trackRect.width * progress)
+    }
+
+    private func seconds(for point: CGPoint) -> PlaybackSeconds {
+        guard duration > 0 else { return 0 }
+        let clampedX = min(max(point.x, trackRect.minX), trackRect.maxX)
+        let progress = (clampedX - trackRect.minX) / max(trackRect.width, 1)
+        return PlaybackSeconds(progress) * duration
+    }
+
+    private func handleRect(at x: CGFloat) -> CGRect {
+        CGRect(x: x - 8, y: 0, width: 16, height: 28)
+    }
+
+    private func labelRect(at x: CGFloat) -> CGRect {
+        CGRect(x: x - 12, y: 30, width: 24, height: 22)
+    }
+
+    private func playheadRect(at x: CGFloat) -> CGRect {
+        CGRect(x: x - 4, y: 0, width: 8, height: 20)
+    }
+
+    private func resolvedDragTarget(for point: CGPoint) -> DragTarget {
+        if handleRect(at: startX).insetBy(dx: -6, dy: -4).contains(point) || labelRect(at: startX).insetBy(dx: -4, dy: -2).contains(point) {
+            return .startHandle
+        }
+
+        if handleRect(at: endX).insetBy(dx: -6, dy: -4).contains(point) || labelRect(at: endX).insetBy(dx: -4, dy: -2).contains(point) {
+            return .endHandle
+        }
+
+        if playheadRect(at: xPosition(for: currentPosition)).insetBy(dx: -5, dy: -4).contains(point) {
+            return .playhead
+        }
+
+        return .playhead
+    }
+
+    private func updateDrag(with point: CGPoint, isFinal: Bool = false) {
+        let proposedSeconds = seconds(for: point)
+
+        switch dragTarget {
+        case .playhead:
+            currentPosition = proposedSeconds
+            updateLayerFrames()
+            if isFinal {
+                onSeekEnded?(proposedSeconds)
+            } else {
+                onSeekChanged?(proposedSeconds)
+            }
+        case .startHandle:
+            let updatedStart = min(proposedSeconds, selectionEnd)
+            selectionStart = updatedStart
+            updateLayerFrames()
+            if isFinal {
+                onSelectionCommit?(selectionStart, selectionEnd)
+            } else {
+                onSelectionChange?(selectionStart, selectionEnd)
+            }
+        case .endHandle:
+            let updatedEnd = max(proposedSeconds, selectionStart)
+            selectionEnd = updatedEnd
+            updateLayerFrames()
+            if isFinal {
+                onSelectionCommit?(selectionStart, selectionEnd)
+            } else {
+                onSelectionChange?(selectionStart, selectionEnd)
+            }
+        case .none:
+            break
+        }
     }
 }
 

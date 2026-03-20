@@ -9,6 +9,10 @@ final class PlaybackEngine {
     private let loopController: LoopController
     private let seekController: PreciseSeekController
     private var timeObserverToken: Any?
+    private var isScrubbing = false
+    private var scrubSeekInFlight = false
+    private var pendingScrubSeekSeconds: PlaybackSeconds?
+    private var scrubTimer: DispatchSourceTimer?
 
     var onPositionUpdate: PositionUpdateHandler?
     var onLoopModeUpdate: LoopModeUpdateHandler?
@@ -24,6 +28,7 @@ final class PlaybackEngine {
     }
 
     deinit {
+        stopScrubTimer()
         detachTimeObserver()
         NotificationCenter.default.removeObserver(self)
     }
@@ -117,9 +122,30 @@ final class PlaybackEngine {
 
     func seekTo(seconds: PlaybackSeconds) {
         let duration = currentDurationSeconds()
-        let normalized = loopController.normalizedPosition(for: seconds, duration: duration)
-        let time = CMTime.seconds(normalized)
+        let clamped = min(max(seconds, 0), max(duration, 0))
+        let time = CMTime.seconds(clamped)
         player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func beginScrubbing() {
+        isScrubbing = true
+        scrubSeekInFlight = false
+        pendingScrubSeekSeconds = nil
+        startScrubTimer()
+    }
+
+    func scrub(to seconds: PlaybackSeconds) {
+        let duration = currentDurationSeconds()
+        let clamped = min(max(seconds, 0), max(duration, 0))
+        pendingScrubSeekSeconds = clamped
+    }
+
+    func endScrubbing(at seconds: PlaybackSeconds) {
+        isScrubbing = false
+        pendingScrubSeekSeconds = nil
+        scrubSeekInFlight = false
+        stopScrubTimer()
+        seekTo(seconds: seconds)
     }
 
     func seekFrame(delta: Int) {
@@ -185,6 +211,9 @@ final class PlaybackEngine {
     }
 
     private func applyRangeLoopIfNeeded() {
+        guard !isScrubbing else {
+            return
+        }
         let current = currentTimeSeconds()
         let duration = currentDurationSeconds()
         guard let restart = loopController.loopRestartTime(currentSeconds: current, duration: duration) else {
@@ -198,11 +227,50 @@ final class PlaybackEngine {
 
     @objc
     private func handlePlaybackEnd(_ notification: Notification) {
+        guard !isScrubbing else {
+            return
+        }
         let duration = currentDurationSeconds()
         guard let restart = loopController.loopRestartTime(currentSeconds: duration, duration: duration) else {
             return
         }
         player.seek(to: .seconds(restart), toleranceBefore: .zero, toleranceAfter: .zero)
         player.play()
+    }
+
+    private func startScrubTimer() {
+        guard scrubTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(33))
+        timer.setEventHandler { [weak self] in
+            self?.dispatchPendingScrubSeekIfNeeded()
+        }
+        scrubTimer = timer
+        timer.resume()
+    }
+
+    private func stopScrubTimer() {
+        scrubTimer?.cancel()
+        scrubTimer = nil
+    }
+
+    private func dispatchPendingScrubSeekIfNeeded() {
+        guard isScrubbing, !scrubSeekInFlight, let target = pendingScrubSeekSeconds else {
+            return
+        }
+
+        pendingScrubSeekSeconds = nil
+        scrubSeekInFlight = true
+
+        let tolerance = CMTime(seconds: 1.0 / 20.0, preferredTimescale: 600)
+        player.seek(
+            to: .seconds(target),
+            toleranceBefore: tolerance,
+            toleranceAfter: tolerance
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.scrubSeekInFlight = false
+            self.dispatchPendingScrubSeekIfNeeded()
+        }
     }
 }
