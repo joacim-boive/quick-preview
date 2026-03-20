@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        buildMainMenu()
         let controller = ensureWindowController()
         controller.showWindow(nil)
         controller.window?.center()
@@ -78,6 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc
+    private func handleOpenFromMenu(_ sender: Any?) {
+        ensureWindowController().presentOpenVideoPanel()
+        _ = sender
+    }
+
     private func openFromSchemeURL(_ url: URL) {
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -98,6 +105,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = MainPlayerWindowController()
         windowController = controller
         return controller
+    }
+
+    private func buildMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+
+        let appMenu = NSMenu()
+        let appName = ProcessInfo.processInfo.processName
+        appMenu.addItem(
+            withTitle: "Quit \(appName)",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appMenuItem.submenu = appMenu
+
+        let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        mainMenu.addItem(fileMenuItem)
+
+        let fileMenu = NSMenu(title: "File")
+        let openItem = NSMenuItem(
+            title: "Open...",
+            action: #selector(handleOpenFromMenu(_:)),
+            keyEquivalent: "o"
+        )
+        openItem.target = self
+        fileMenu.addItem(openItem)
+        fileMenuItem.submenu = fileMenu
+
+        NSApp.mainMenu = mainMenu
     }
 
     private func startFinderSelectionMonitor() {

@@ -14,18 +14,21 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let clearSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
     private let selectionLabel = NSTextField(labelWithString: "Selection: none")
     private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let rotationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let fullscreenButton = NSButton(title: "Fullscreen", target: nil, action: nil)
-    private let openButton = NSButton(title: "Open Video", target: nil, action: nil)
     private let openFinderSelectionButton = NSButton(title: "Open Finder Selection", target: nil, action: nil)
-    private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse Open Video or Open Finder Selection.")
+    private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse File > Open... or Open Finder Selection.")
 
     private var isDraggingSlider = false
     private var escMonitor: Any?
     private var selectionStart: PlaybackSeconds?
     private var selectionEnd: PlaybackSeconds?
     private var currentVideoURL: URL?
+    private var currentRotationDegrees = 0
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
+    private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
+    private let allowedRotationDegrees = [0, 90, 180, 270]
 
     enum FinderSelectionState {
         case none
@@ -61,6 +64,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let normalizedURL = url.standardizedFileURL
         engine.attach(to: normalizedURL, autoplay: true)
         currentVideoURL = normalizedURL
+        let storedRotation = storedRotationDegrees(for: normalizedURL)
+        applyRotationDegrees(storedRotation)
+        rotationPopup.isEnabled = true
         updateWindowTitle()
         selectionStart = nil
         selectionEnd = nil
@@ -251,7 +257,19 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func presentOpenPanelIfNeeded() {
         guard engine.currentPlayer().currentItem == nil else { return }
-        handleOpenVideo(openButton)
+        presentOpenVideoPanel()
+    }
+
+    func presentOpenVideoPanel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.beginSheetModal(for: window!) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.openVideo(url: url)
+        }
     }
 
     private func configureUI(on root: KeyCaptureView) {
@@ -301,14 +319,18 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         volumeSlider.isContinuous = true
         volumeSlider.doubleValue = Double(engine.currentPlayer().volume)
 
+        rotationPopup.translatesAutoresizingMaskIntoConstraints = false
+        rotationPopup.target = self
+        rotationPopup.action = #selector(handleRotationChanged(_:))
+        rotationPopup.removeAllItems()
+        rotationPopup.addItems(withTitles: allowedRotationDegrees.map { "\($0)°" })
+        rotationPopup.selectItem(at: 0)
+        rotationPopup.isEnabled = false
+
         fullscreenButton.translatesAutoresizingMaskIntoConstraints = false
         fullscreenButton.target = self
         fullscreenButton.action = #selector(handleToggleFullscreen(_:))
         updateFullscreenButtonTitle()
-
-        openButton.translatesAutoresizingMaskIntoConstraints = false
-        openButton.target = self
-        openButton.action = #selector(handleOpenVideo(_:))
 
         openFinderSelectionButton.translatesAutoresizingMaskIntoConstraints = false
         openFinderSelectionButton.target = self
@@ -321,13 +343,13 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
         let topControls = NSStackView(
             views: [
-                openButton,
                 openFinderSelectionButton,
                 loopButton,
                 setSelectionStartButton,
                 setSelectionEndButton,
                 replaySelectionButton,
                 clearSelectionButton,
+                rotationPopup,
                 fullscreenButton
             ]
         )
@@ -539,19 +561,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc
-    private func handleOpenVideo(_ sender: NSButton) {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie]
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.beginSheetModal(for: window!) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.openVideo(url: url)
-        }
-    }
-
-    @objc
     private func handleOpenFinderSelection(_ sender: NSButton) {
         _ = openFinderSelectionIfVideo(showErrors: true)
     }
@@ -564,6 +573,16 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     @objc
     private func handleToggleFullscreen(_ sender: NSButton) {
         window?.toggleFullScreen(sender)
+    }
+
+    @objc
+    private func handleRotationChanged(_ sender: NSPopUpButton) {
+        let selectedIndex = max(sender.indexOfSelectedItem, 0)
+        guard selectedIndex < allowedRotationDegrees.count else { return }
+        let degrees = allowedRotationDegrees[selectedIndex]
+        applyRotationDegrees(degrees)
+        guard let currentVideoURL else { return }
+        storeRotationDegrees(degrees, for: currentVideoURL)
     }
 
     private func handlePlayerSurfaceClick() {
@@ -599,6 +618,35 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         window?.title = Self.baseWindowTitle
+    }
+
+    private func applyRotationDegrees(_ degrees: Int) {
+        guard allowedRotationDegrees.contains(degrees) else { return }
+        currentRotationDegrees = degrees
+        playerView.setRotationDegrees(degrees)
+        if let selectedIndex = allowedRotationDegrees.firstIndex(of: degrees) {
+            rotationPopup.selectItem(at: selectedIndex)
+        }
+    }
+
+    private func storedRotationDegrees(for url: URL) -> Int {
+        let defaults = UserDefaults.standard
+        guard
+            let raw = defaults.dictionary(forKey: Self.clipRotationDefaultsKey) as? [String: Int],
+            let degrees = raw[url.path],
+            allowedRotationDegrees.contains(degrees)
+        else {
+            return 0
+        }
+        return degrees
+    }
+
+    private func storeRotationDegrees(_ degrees: Int, for url: URL) {
+        guard allowedRotationDegrees.contains(degrees) else { return }
+        let defaults = UserDefaults.standard
+        var raw = defaults.dictionary(forKey: Self.clipRotationDefaultsKey) as? [String: Int] ?? [:]
+        raw[url.path] = degrees
+        defaults.set(raw, forKey: Self.clipRotationDefaultsKey)
     }
 
     private func updateFullscreenButtonTitle() {
@@ -710,6 +758,7 @@ private final class PlayerSurfaceView: NSView {
     private let playbackIndicatorContainer = NSVisualEffectView()
     private let playbackIndicatorImageView = NSImageView()
     private var hideIndicatorWorkItem: DispatchWorkItem?
+    private var rotationDegrees = 0
 
     var clickHandler: (() -> Void)?
 
@@ -762,7 +811,18 @@ private final class PlayerSurfaceView: NSView {
 
     override func layout() {
         super.layout()
-        playerLayer.frame = bounds
+        let isQuarterTurn = rotationDegrees == 90 || rotationDegrees == 270
+        if isQuarterTurn {
+            let frame = CGRect(
+                x: (bounds.width - bounds.height) / 2,
+                y: (bounds.height - bounds.width) / 2,
+                width: bounds.height,
+                height: bounds.width
+            )
+            playerLayer.frame = frame
+        } else {
+            playerLayer.frame = bounds
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -801,5 +861,18 @@ private final class PlayerSurfaceView: NSView {
         }
         hideIndicatorWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
+    }
+
+    func setRotationDegrees(_ degrees: Int) {
+        let normalized = ((degrees % 360) + 360) % 360
+        rotationDegrees = normalized
+        let radians = CGFloat(normalized) * .pi / 180
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.setAffineTransform(CGAffineTransform(rotationAngle: radians))
+        CATransaction.commit()
+
+        needsLayout = true
     }
 }
