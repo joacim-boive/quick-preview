@@ -85,6 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = sender
     }
 
+    @objc
+    private func handleOpenFinderSelectionFromMenu(_ sender: Any?) {
+        let controller = ensureWindowController()
+        _ = controller.openFinderSelectionIfVideo(showErrors: true)
+        _ = sender
+    }
+
     private func openFromSchemeURL(_ url: URL) {
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -133,6 +140,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         openItem.target = self
         fileMenu.addItem(openItem)
+
+        let openFinderSelectionItem = NSMenuItem(
+            title: "Open Finder Selection...",
+            action: #selector(handleOpenFinderSelectionFromMenu(_:)),
+            keyEquivalent: "o"
+        )
+        openFinderSelectionItem.target = self
+        openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(openFinderSelectionItem)
         fileMenuItem.submenu = fileMenu
 
         NSApp.mainMenu = mainMenu
