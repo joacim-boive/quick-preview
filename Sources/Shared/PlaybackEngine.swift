@@ -13,6 +13,7 @@ final class PlaybackEngine {
     private var scrubSeekInFlight = false
     private var pendingScrubSeekSeconds: PlaybackSeconds?
     private var scrubTimer: DispatchSourceTimer?
+    private var audioGain: Float = 1.0
 
     var onPositionUpdate: PositionUpdateHandler?
     var onLoopModeUpdate: LoopModeUpdateHandler?
@@ -39,6 +40,7 @@ final class PlaybackEngine {
 
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
+        applyAudioGainToCurrentItem()
 
         detachTimeObserver()
         attachTimeObserver()
@@ -47,6 +49,11 @@ final class PlaybackEngine {
         if autoplay {
             play()
         }
+    }
+
+    func setAudioGain(_ gain: Float) {
+        audioGain = max(gain, 0)
+        applyAudioGainToCurrentItem()
     }
 
     func currentPlayer() -> AVPlayer {
@@ -125,6 +132,25 @@ final class PlaybackEngine {
         let clamped = min(max(seconds, 0), max(duration, 0))
         let time = CMTime.seconds(clamped)
         player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func applyAudioGainToCurrentItem() {
+        guard let item = player.currentItem else { return }
+
+        // AVPlayer.volume is documented as 0.0...1.0; use AVAudioMix to exceed 100%.
+        player.volume = 1.0
+
+        let inputParameters: [AVMutableAudioMixInputParameters] = item.tracks.compactMap { itemTrack in
+            guard let assetTrack = itemTrack.assetTrack, assetTrack.mediaType == .audio else { return nil }
+            let params = AVMutableAudioMixInputParameters(track: assetTrack)
+            params.setVolume(audioGain, at: .zero)
+            return params
+        }
+
+        guard !inputParameters.isEmpty else { return }
+        let audioMix = AVMutableAudioMix()
+        audioMix.inputParameters = inputParameters
+        item.audioMix = audioMix
     }
 
     func beginScrubbing() {

@@ -8,11 +8,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let loopButton = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
-    private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let maxVolumeGain: Double = 3.0 // 300%
+    private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 3.0, target: nil, action: nil)
+    private let volumePercentLabel = NSTextField(labelWithString: "100%")
     private let rotationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let fullscreenButton = NSButton(title: "Fullscreen", target: nil, action: nil)
-    private let openFinderSelectionButton = NSButton(title: "Open Finder Selection", target: nil, action: nil)
-    private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse File > Open... or Open Finder Selection.")
+    private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse File > Open... or File > Open Finder Selection...")
 
     private var escMonitor: Any?
     private var selectionStart: PlaybackSeconds = 0
@@ -22,15 +22,26 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var hasStoredSelectionForCurrentClip = false
     private var lastKnownDuration: PlaybackSeconds = 0
     private var wasPlayingBeforePlayheadDrag = false
+    private var pendingRestoredPlayhead: PlaybackSeconds?
+    private var pendingRestoredLoopEnabled: Bool?
+    private var pendingRestoredIsPlaying: Bool?
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
     private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
     private static let clipSelectionDefaultsKey = "clipSelectionByPath"
+    private static let clipPlaybackDefaultsKey = "clipPlaybackStateByPath"
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     private struct ClipSelection: Codable {
         let start: PlaybackSeconds
         let end: PlaybackSeconds
+    }
+
+    private struct ClipPlaybackState: Codable {
+        let playhead: PlaybackSeconds
+        let volume: Double
+        let isLoopEnabled: Bool
+        let isPlaying: Bool
     }
 
     enum FinderSelectionState {
@@ -64,16 +75,20 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func openVideo(url: URL) {
         showWindow(nil)
+        persistCurrentClipPlaybackStateIfNeeded()
         let normalizedURL = url.standardizedFileURL
         engine.attach(to: normalizedURL, autoplay: true)
         currentVideoURL = normalizedURL
         lastKnownDuration = 0
+        pendingRestoredPlayhead = nil
+        pendingRestoredLoopEnabled = nil
+        pendingRestoredIsPlaying = nil
         let storedRotation = storedRotationDegrees(for: normalizedURL)
         applyRotationDegrees(storedRotation)
         rotationPopup.isEnabled = true
         updateWindowTitle()
         restoreSelection(for: normalizedURL, duration: engine.currentDurationSeconds())
-        loopButton.state = .off
+        restoreClipPlaybackState(for: normalizedURL, duration: engine.currentDurationSeconds())
         emptyStateLabel.isHidden = true
         updateControlState(hasVideo: true)
     }
@@ -305,6 +320,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
                 self.engine.play()
             }
             self.wasPlayingBeforePlayheadDrag = false
+            self.persistCurrentClipPlaybackStateIfNeeded()
         }
         inlineTimelineView.onSelectionChange = { [weak self] start, end in
             self?.handleInlineSelectionChange(start: start, end: end, shouldCommit: false)
@@ -317,6 +333,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         timeLabel.alignment = .right
 
+        volumePercentLabel.translatesAutoresizingMaskIntoConstraints = false
+        volumePercentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        volumePercentLabel.alignment = .right
+
         loopButton.translatesAutoresizingMaskIntoConstraints = false
         loopButton.target = self
         loopButton.action = #selector(handleLoopToggle(_:))
@@ -325,7 +345,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         volumeSlider.target = self
         volumeSlider.action = #selector(handleVolumeChanged(_:))
         volumeSlider.isContinuous = true
-        volumeSlider.doubleValue = Double(engine.currentPlayer().volume)
+        volumeSlider.doubleValue = 1
+        engine.setAudioGain(1)
+        updateVolumePercentLabel(for: 1)
 
         rotationPopup.translatesAutoresizingMaskIntoConstraints = false
         rotationPopup.target = self
@@ -335,15 +357,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         rotationPopup.selectItem(at: 0)
         rotationPopup.isEnabled = false
 
-        fullscreenButton.translatesAutoresizingMaskIntoConstraints = false
-        fullscreenButton.target = self
-        fullscreenButton.action = #selector(handleToggleFullscreen(_:))
-        updateFullscreenButtonTitle()
-
-        openFinderSelectionButton.translatesAutoresizingMaskIntoConstraints = false
-        openFinderSelectionButton.target = self
-        openFinderSelectionButton.action = #selector(handleOpenFinderSelection(_:))
-
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyStateLabel.alignment = .center
         emptyStateLabel.font = .systemFont(ofSize: 20, weight: .medium)
@@ -351,10 +364,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
         let topControls = NSStackView(
             views: [
-                openFinderSelectionButton,
                 loopButton,
-                rotationPopup,
-                fullscreenButton
+                rotationPopup
             ]
         )
         topControls.orientation = .horizontal
@@ -366,6 +377,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let bottomControls = NSStackView(
             views: [
                 volumeSlider,
+                volumePercentLabel,
                 timeLabel
             ]
         )
@@ -416,6 +428,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         root.keyHandler = { [weak self] event in
             self?.handleKey(event: event)
         }
+        root.onFileURLsDropped = { [weak self] urls in
+            guard let self else { return }
+            let videoURL = urls.first(where: self.isVideoURL(_:))
+            guard let videoURL else { return }
+            self.openVideo(url: videoURL)
+        }
         installEscCloseMonitor()
     }
 
@@ -425,6 +443,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             if abs(position.duration - self.lastKnownDuration) > 0.01 {
                 self.lastKnownDuration = position.duration
                 self.synchronizeSelectionState(for: position.duration)
+                self.applyPendingPlaybackRestorationIfPossible(duration: position.duration)
             }
             if !self.inlineTimelineView.isDraggingPlayhead {
                 self.inlineTimelineView.currentPosition = position.seconds
@@ -446,6 +465,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func handleKey(event: NSEvent) {
         if event.modifierFlags.contains(.command), event.keyCode == 12 {
+            persistCurrentClipPlaybackStateIfNeeded()
             NSApp.terminate(nil)
             return
         }
@@ -493,6 +513,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             window?.toggleFullScreen(nil)
             return
         }
+        persistCurrentClipPlaybackStateIfNeeded()
         engine.pause()
         window?.orderOut(nil)
     }
@@ -508,9 +529,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
                 )
                 return
             }
+            persistCurrentClipPlaybackStateIfNeeded()
             return
         }
         engine.clearLoop()
+        persistCurrentClipPlaybackStateIfNeeded()
     }
 
     private func handleInlineSelectionChange(start: PlaybackSeconds, end: PlaybackSeconds, shouldCommit: Bool) {
@@ -524,18 +547,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc
-    private func handleOpenFinderSelection(_ sender: NSButton) {
-        _ = openFinderSelectionIfVideo(showErrors: true)
-    }
-
-    @objc
     private func handleVolumeChanged(_ sender: NSSlider) {
-        engine.currentPlayer().volume = Float(sender.doubleValue)
-    }
-
-    @objc
-    private func handleToggleFullscreen(_ sender: NSButton) {
-        window?.toggleFullScreen(sender)
+        engine.setAudioGain(Float(sender.doubleValue))
+        updateVolumePercentLabel(for: sender.doubleValue)
+        persistCurrentClipPlaybackStateIfNeeded()
     }
 
     @objc
@@ -643,6 +658,37 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func storedClipPlaybackState(for url: URL) -> ClipPlaybackState? {
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: Self.clipPlaybackDefaultsKey) else {
+            return nil
+        }
+        do {
+            let raw = try JSONDecoder().decode([String: ClipPlaybackState].self, from: data)
+            return raw[url.path]
+        } catch {
+            return nil
+        }
+    }
+
+    private func storeClipPlaybackState(_ state: ClipPlaybackState, for url: URL) {
+        let defaults = UserDefaults.standard
+        let existing: [String: ClipPlaybackState]
+        if let data = defaults.data(forKey: Self.clipPlaybackDefaultsKey),
+           let decoded = try? JSONDecoder().decode([String: ClipPlaybackState].self, from: data) {
+            existing = decoded
+        } else {
+            existing = [:]
+        }
+
+        var updated = existing
+        updated[url.path] = state
+
+        if let data = try? JSONEncoder().encode(updated) {
+            defaults.set(data, forKey: Self.clipPlaybackDefaultsKey)
+        }
+    }
+
     private func restoreSelection(for url: URL, duration: PlaybackSeconds) {
         let clampedDuration = max(duration, 0)
         if let stored = storedSelection(for: url) {
@@ -662,23 +708,76 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         synchronizeSelectionState(for: clampedDuration)
     }
 
-    private func updateFullscreenButtonTitle() {
-        if window?.styleMask.contains(.fullScreen) == true {
-            fullscreenButton.title = "Exit Fullscreen"
-            return
+    private func restoreClipPlaybackState(for url: URL, duration: PlaybackSeconds) {
+        let restored = storedClipPlaybackState(for: url)
+
+        if let restored {
+            let clampedVolume = min(max(restored.volume, 0), maxVolumeGain)
+            volumeSlider.doubleValue = clampedVolume
+            engine.setAudioGain(Float(clampedVolume))
+            updateVolumePercentLabel(for: clampedVolume)
+            pendingRestoredPlayhead = max(restored.playhead, 0)
+            pendingRestoredLoopEnabled = restored.isLoopEnabled
+            pendingRestoredIsPlaying = restored.isPlaying
+        } else {
+            volumeSlider.doubleValue = 1
+            engine.setAudioGain(1)
+            updateVolumePercentLabel(for: 1)
+            pendingRestoredPlayhead = nil
+            pendingRestoredLoopEnabled = false
+            pendingRestoredIsPlaying = true
         }
-        fullscreenButton.title = "Fullscreen"
+
+        applyPendingPlaybackRestorationIfPossible(duration: duration)
     }
 
-    func windowDidEnterFullScreen(_ notification: Notification) {
-        updateFullscreenButtonTitle()
+    private func updateVolumePercentLabel(for gain: Double) {
+        guard gain.isFinite else { return }
+        let percent = gain * 100
+        let percent1 = (percent * 10).rounded() / 10
+        if abs(percent1 - percent1.rounded()) < 0.0001 {
+            volumePercentLabel.stringValue = "\(Int(percent1.rounded()))%"
+        } else {
+            volumePercentLabel.stringValue = String(format: "%.1f%%", percent1)
+        }
     }
 
-    func windowDidExitFullScreen(_ notification: Notification) {
-        updateFullscreenButtonTitle()
+    private func applyPendingPlaybackRestorationIfPossible(duration: PlaybackSeconds) {
+        guard duration > 0 else { return }
+
+        if let pendingRestoredPlayhead {
+            let clamped = min(max(pendingRestoredPlayhead, 0), duration)
+            self.pendingRestoredPlayhead = nil
+            engine.handle(command: .seekTo(seconds: clamped))
+            inlineTimelineView.currentPosition = clamped
+        }
+
+        if let pendingRestoredLoopEnabled {
+            self.pendingRestoredLoopEnabled = nil
+            if pendingRestoredLoopEnabled {
+                loopButton.state = .on
+                if !applySelectedLoop(shouldStartPlayback: false) {
+                    loopButton.state = .off
+                    engine.clearLoop()
+                }
+            } else {
+                loopButton.state = .off
+                engine.clearLoop()
+            }
+        }
+
+        if let pendingRestoredIsPlaying {
+            self.pendingRestoredIsPlaying = nil
+            if pendingRestoredIsPlaying {
+                engine.play()
+            } else {
+                engine.pause()
+            }
+        }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        persistCurrentClipPlaybackStateIfNeeded()
         engine.pause()
         return true
     }
@@ -768,11 +867,24 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         if loopButton.state == .on {
             loopButton.state = .off
             engine.clearLoop()
+            persistCurrentClipPlaybackStateIfNeeded()
             return
         }
 
         loopButton.state = .on
         handleLoopToggle(loopButton)
+    }
+
+    private func persistCurrentClipPlaybackStateIfNeeded() {
+        guard let currentVideoURL else { return }
+        persistCurrentSelectionIfNeeded()
+        let state = ClipPlaybackState(
+            playhead: max(engine.currentTimeSeconds(), 0),
+            volume: min(max(volumeSlider.doubleValue, 0), maxVolumeGain),
+            isLoopEnabled: loopButton.state == .on,
+            isPlaying: engine.currentPlayer().rate != 0
+        )
+        storeClipPlaybackState(state, for: currentVideoURL)
     }
 
     private func updateControlState(hasVideo: Bool) {
@@ -839,10 +951,6 @@ private final class InlineSelectionTimelineView: NSView {
     private let playheadLayer = CALayer()
     private let startHandleLayer = CALayer()
     private let endHandleLayer = CALayer()
-    private let startBadgeLayer = CALayer()
-    private let endBadgeLayer = CALayer()
-    private let startBadgeTextLayer = CATextLayer()
-    private let endBadgeTextLayer = CATextLayer()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -890,10 +998,8 @@ private final class InlineSelectionTimelineView: NSView {
         playheadLayer.cornerRadius = 2
         startHandleLayer.cornerRadius = 8
         endHandleLayer.cornerRadius = 8
-        startBadgeLayer.cornerRadius = 6
-        endBadgeLayer.cornerRadius = 6
 
-        [trackLayer, selectionLayer, playheadLayer, startHandleLayer, endHandleLayer, startBadgeLayer, endBadgeLayer].forEach {
+        [trackLayer, selectionLayer, playheadLayer, startHandleLayer, endHandleLayer].forEach {
             $0.actions = [
                 "position": NSNull(),
                 "bounds": NSNull(),
@@ -903,27 +1009,7 @@ private final class InlineSelectionTimelineView: NSView {
             ]
             rootLayer.addSublayer($0)
         }
-
-        configureBadgeTextLayer(startBadgeTextLayer, title: "A")
-        configureBadgeTextLayer(endBadgeTextLayer, title: "B")
-        startBadgeLayer.addSublayer(startBadgeTextLayer)
-        endBadgeLayer.addSublayer(endBadgeTextLayer)
         updateAppearance()
-    }
-
-    private func configureBadgeTextLayer(_ textLayer: CATextLayer, title: String) {
-        textLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        textLayer.alignmentMode = .center
-        textLayer.fontSize = 12
-        textLayer.font = NSFont.systemFont(ofSize: 12, weight: .bold)
-        textLayer.foregroundColor = NSColor.white.cgColor
-        textLayer.string = title
-        textLayer.actions = [
-            "position": NSNull(),
-            "bounds": NSNull(),
-            "frame": NSNull(),
-            "contents": NSNull()
-        ]
     }
 
     private func updateAppearance() {
@@ -936,8 +1022,6 @@ private final class InlineSelectionTimelineView: NSView {
         endHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? 0.2 : 0.1).cgColor
         startHandleLayer.borderWidth = 1
         endHandleLayer.borderWidth = 1
-        startBadgeLayer.backgroundColor = NSColor(calibratedRed: 0.27, green: 0.58, blue: 0.98, alpha: isControlEnabled ? 0.95 : 0.35).cgColor
-        endBadgeLayer.backgroundColor = NSColor(calibratedRed: 0.27, green: 0.58, blue: 0.98, alpha: isControlEnabled ? 0.95 : 0.35).cgColor
     }
 
     private func updateLayerFrames() {
@@ -953,10 +1037,6 @@ private final class InlineSelectionTimelineView: NSView {
         playheadLayer.frame = CGRect(x: xPosition(for: currentPosition) - 2, y: 1, width: 4, height: 18)
         startHandleLayer.frame = handleRect(at: startX)
         endHandleLayer.frame = handleRect(at: endX)
-        startBadgeLayer.frame = labelRect(at: startX)
-        endBadgeLayer.frame = labelRect(at: endX)
-        startBadgeTextLayer.frame = startBadgeLayer.bounds.insetBy(dx: 0, dy: 3)
-        endBadgeTextLayer.frame = endBadgeLayer.bounds.insetBy(dx: 0, dy: 3)
     }
 
     private var trackRect: CGRect {
@@ -988,20 +1068,16 @@ private final class InlineSelectionTimelineView: NSView {
         CGRect(x: x - 8, y: 0, width: 16, height: 28)
     }
 
-    private func labelRect(at x: CGFloat) -> CGRect {
-        CGRect(x: x - 12, y: 30, width: 24, height: 22)
-    }
-
     private func playheadRect(at x: CGFloat) -> CGRect {
         CGRect(x: x - 4, y: 0, width: 8, height: 20)
     }
 
     private func resolvedDragTarget(for point: CGPoint) -> DragTarget {
-        if handleRect(at: startX).insetBy(dx: -6, dy: -4).contains(point) || labelRect(at: startX).insetBy(dx: -4, dy: -2).contains(point) {
+        if handleRect(at: startX).insetBy(dx: -6, dy: -4).contains(point) {
             return .startHandle
         }
 
-        if handleRect(at: endX).insetBy(dx: -6, dy: -4).contains(point) || labelRect(at: endX).insetBy(dx: -4, dy: -2).contains(point) {
+        if handleRect(at: endX).insetBy(dx: -6, dy: -4).contains(point) {
             return .endHandle
         }
 
