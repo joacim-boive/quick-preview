@@ -11,7 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     )
     private var isSelectionCheckInProgress = false
     private let loopMenuItemTag = 4101
-    private let rotateClockwiseMenuItemTag = 4102
     private let rotationMenuItemBaseTag = 4200
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
@@ -110,12 +109,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc
-    private func handleRotateClockwiseFromMenu(_ sender: Any?) {
-        ensureWindowController().rotateClockwise()
-        _ = sender
-    }
-
-    @objc
     private func handleSetRotationFromMenu(_ sender: NSMenuItem) {
         let rotationDegrees = sender.tag - rotationMenuItemBaseTag
         ensureWindowController().setRotationDegrees(rotationDegrees)
@@ -126,8 +119,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch menuItem.tag {
         case loopMenuItemTag:
             menuItem.state = controller.loopEnabled() ? .on : .off
-            return controller.hasLoadedVideo()
-        case rotateClockwiseMenuItemTag:
             return controller.hasLoadedVideo()
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
@@ -212,16 +203,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         loopItem.tag = loopMenuItemTag
         loopItem.keyEquivalentModifierMask = [.command]
         playbackMenu.addItem(loopItem)
-
-        let rotateClockwiseItem = NSMenuItem(
-            title: "Rotate Clockwise",
-            action: #selector(handleRotateClockwiseFromMenu(_:)),
-            keyEquivalent: "r"
-        )
-        rotateClockwiseItem.target = self
-        rotateClockwiseItem.tag = rotateClockwiseMenuItemTag
-        rotateClockwiseItem.keyEquivalentModifierMask = []
-        playbackMenu.addItem(rotateClockwiseItem)
 
         let rotationMenuItem = NSMenuItem(title: "Rotation", action: nil, keyEquivalent: "")
         let rotationMenu = NSMenu(title: "Rotation")
