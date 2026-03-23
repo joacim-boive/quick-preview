@@ -214,7 +214,7 @@ final class PlaybackEngine {
     }
 
     private func attachTimeObserver() {
-        let interval = CMTime(seconds: 1.0 / 60.0, preferredTimescale: 600)
+        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
         timeObserverToken = player.addPeriodicTimeObserver(
             forInterval: interval,
             queue: .main
