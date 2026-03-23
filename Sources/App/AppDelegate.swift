@@ -1,9 +1,14 @@
 import Cocoa
+import UniformTypeIdentifiers
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyManager = GlobalHotkeyManager()
     private var windowController: MainPlayerWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
+    private let finderSelectionMonitorQueue = DispatchQueue(
+        label: "quickpreview.finder-selection-monitor",
+        qos: .utility
+    )
     private var isSelectionCheckInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -54,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        windowController?.flushPersistedStateWrites()
         finderSelectionMonitorTimer?.cancel()
         finderSelectionMonitorTimer = nil
     }
@@ -156,12 +162,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startFinderSelectionMonitor() {
         finderSelectionMonitorTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        let timer = DispatchSource.makeTimerSource(queue: finderSelectionMonitorQueue)
+        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500))
         timer.setEventHandler { [weak self] in
-            DispatchQueue.main.async {
-                self?.followFinderSelectionIfNeeded()
-            }
+            self?.followFinderSelectionIfNeeded()
         }
         finderSelectionMonitorTimer = timer
         timer.resume()
@@ -174,33 +178,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isSelectionCheckInProgress = true
         defer { isSelectionCheckInProgress = false }
 
-        guard let controller = windowController else {
-            return
+        let loadedVideoURL: URL? = DispatchQueue.main.sync { [weak self] in
+            guard
+                let self,
+                let controller = self.windowController,
+                controller.hasLoadedVideo()
+            else {
+                return nil
+            }
+            return controller.loadedVideoURL()
         }
-        guard controller.hasLoadedVideo() else {
+
+        guard let loadedVideoURL else {
             return
         }
 
-        let passiveState = controller.finderSelectionState(activateFinder: false)
-        let state: MainPlayerWindowController.FinderSelectionState
-        switch passiveState {
-        case .none:
-            state = controller.finderSelectionState(activateFinder: true)
-        default:
-            state = passiveState
+        guard let selectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL() else {
+            return
+        }
+        guard selectedVideoURL != loadedVideoURL else {
+            return
         }
 
-        switch state {
-        case .none:
-            return
-        case .nonVideo:
-            return
-        case let .video(selectedVideoURL):
-            guard selectedVideoURL != controller.loadedVideoURL() else {
+        DispatchQueue.main.async { [weak self] in
+            guard
+                let self,
+                let controller = self.windowController,
+                controller.hasLoadedVideo(),
+                selectedVideoURL != controller.loadedVideoURL()
+            else {
                 return
             }
             controller.openVideo(url: selectedVideoURL)
-            return
         }
     }
 
@@ -212,6 +221,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+    }
+}
+
+private enum FinderSelectionProbe {
+    static func selectedFinderVideoURL() -> URL? {
+        guard let selectedURL = selectedFinderFileURL() else {
+            return nil
+        }
+        guard isVideoURL(selectedURL) else {
+            return nil
+        }
+        return selectedURL.standardizedFileURL
+    }
+
+    private static func selectedFinderFileURL() -> URL? {
+        let lines: [String] = [
+            "tell application \"Finder\"",
+            "    set selectedItems to {}",
+            "",
+            "    try",
+            "        set selectedItems to selection",
+            "    end try",
+            "",
+            "    if (count selectedItems) is 0 then",
+            "        try",
+            "            if (count of Finder windows) > 0 then",
+            "                set selectedItems to (selection of front Finder window)",
+            "            end if",
+            "        end try",
+            "    end if",
+            "",
+            "    if (count selectedItems) is 0 then",
+            "        try",
+            "            set selectedItems to (every item of desktop whose selected is true)",
+            "        end try",
+            "    end if",
+            "",
+            "    if (count selectedItems) is 0 then",
+            "        return \"\"",
+            "    end if",
+            "",
+            "    set firstItem to item 1 of selectedItems",
+            "    return POSIX path of (firstItem as alias)",
+            "end tell"
+        ]
+        let script = lines.joined(separator: "\n")
+        guard let output = runAppleScriptUsingProcess(script), !output.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: output)
+    }
+
+    private static func runAppleScriptUsingProcess(_ source: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+
+        var arguments: [String] = []
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        for line in lines {
+            arguments.append("-e")
+            arguments.append(String(line))
+        }
+        process.arguments = arguments
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0 else {
+            return nil
+        }
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: outputData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isVideoURL(_ url: URL) -> Bool {
+        do {
+            let values = try url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
+            if values.isDirectory == true {
+                return false
+            }
+            if let contentType = values.contentType {
+                return contentType.conforms(to: .movie)
+            }
+            return false
+        } catch {
+            return false
         }
     }
 }

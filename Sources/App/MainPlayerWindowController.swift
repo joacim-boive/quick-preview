@@ -21,12 +21,23 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var currentRotationDegrees = 0
     private var hasStoredSelectionForCurrentClip = false
     private var lastKnownDuration: PlaybackSeconds = 0
+    private var lastRenderedPositionWholeSeconds = -1
+    private var lastRenderedDurationWholeSeconds = -1
+    private var lastTimelineUpdateUptime: TimeInterval = 0
+    private let timelineRefreshInterval: TimeInterval = 1.0 / 30.0
     private var wasPlayingBeforePlayheadDrag = false
     private var wasPlayingBeforeSelectionPreview = false
     private var selectionPreviewReturnPosition: PlaybackSeconds?
     private var pendingRestoredPlayhead: PlaybackSeconds?
     private var pendingRestoredLoopEnabled: Bool?
     private var pendingRestoredIsPlaying: Bool?
+    private var clipSelectionStoreCache: [String: ClipSelection] = [:]
+    private var clipPlaybackStoreCache: [String: ClipPlaybackState] = [:]
+    private var hasLoadedClipSelectionStoreCache = false
+    private var hasLoadedClipPlaybackStoreCache = false
+    private var persistSelectionWorkItem: DispatchWorkItem?
+    private var persistPlaybackWorkItem: DispatchWorkItem?
+    private let persistDebounceInterval: TimeInterval = 0.2
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
     private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
@@ -77,11 +88,14 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func openVideo(url: URL) {
         showWindow(nil)
-        persistCurrentClipPlaybackStateIfNeeded()
+        persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         let normalizedURL = url.standardizedFileURL
         engine.attach(to: normalizedURL, autoplay: true)
         currentVideoURL = normalizedURL
         lastKnownDuration = 0
+        lastRenderedPositionWholeSeconds = -1
+        lastRenderedDurationWholeSeconds = -1
+        lastTimelineUpdateUptime = 0
         pendingRestoredPlayhead = nil
         pendingRestoredLoopEnabled = nil
         pendingRestoredIsPlaying = nil
@@ -157,6 +171,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func hasLoadedVideo() -> Bool {
         currentVideoURL != nil
+    }
+
+    func flushPersistedStateWrites() {
+        flushPendingPersistedStateWrites()
     }
 
     private func selectedFinderFileURL(activateFinder: Bool) throws -> URL {
@@ -475,10 +493,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
                 self.synchronizeSelectionState(for: position.duration)
                 self.applyPendingPlaybackRestorationIfPossible(duration: position.duration)
             }
-            if !self.inlineTimelineView.isDraggingPlayhead && !self.inlineTimelineView.isDraggingSelectionHandle {
-                self.inlineTimelineView.currentPosition = position.seconds
-            }
-            self.timeLabel.stringValue = "\(Self.format(position.seconds)) / \(Self.format(position.duration))"
+            self.updateTimelinePositionIfNeeded(position.seconds)
+            self.updateTimeLabelIfNeeded(position.seconds, duration: position.duration)
         }
         engine.onLoopModeUpdate = { [weak self] mode in
             guard let self else { return }
@@ -495,7 +511,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func handleKey(event: NSEvent) {
         if event.modifierFlags.contains(.command), event.keyCode == 12 {
-            persistCurrentClipPlaybackStateIfNeeded()
+            persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
             NSApp.terminate(nil)
             return
         }
@@ -543,7 +559,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             window?.toggleFullScreen(nil)
             return
         }
-        persistCurrentClipPlaybackStateIfNeeded()
+        persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         engine.pause()
         window?.orderOut(nil)
     }
@@ -658,65 +674,25 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func storedSelection(for url: URL) -> ClipSelection? {
-        let defaults = UserDefaults.standard
-        guard let data = defaults.data(forKey: Self.clipSelectionDefaultsKey) else {
-            return nil
-        }
-        do {
-            let raw = try JSONDecoder().decode([String: ClipSelection].self, from: data)
-            return raw[url.path]
-        } catch {
-            return nil
-        }
+        loadClipSelectionStoreCacheIfNeeded()
+        return clipSelectionStoreCache[url.path]
     }
 
     private func storeSelection(_ selection: ClipSelection, for url: URL) {
-        let defaults = UserDefaults.standard
-        let existing: [String: ClipSelection]
-        if let data = defaults.data(forKey: Self.clipSelectionDefaultsKey),
-           let decoded = try? JSONDecoder().decode([String: ClipSelection].self, from: data) {
-            existing = decoded
-        } else {
-            existing = [:]
-        }
-
-        var updated = existing
-        updated[url.path] = selection
-
-        if let data = try? JSONEncoder().encode(updated) {
-            defaults.set(data, forKey: Self.clipSelectionDefaultsKey)
-        }
+        loadClipSelectionStoreCacheIfNeeded()
+        clipSelectionStoreCache[url.path] = selection
+        scheduleSelectionStorePersist()
     }
 
     private func storedClipPlaybackState(for url: URL) -> ClipPlaybackState? {
-        let defaults = UserDefaults.standard
-        guard let data = defaults.data(forKey: Self.clipPlaybackDefaultsKey) else {
-            return nil
-        }
-        do {
-            let raw = try JSONDecoder().decode([String: ClipPlaybackState].self, from: data)
-            return raw[url.path]
-        } catch {
-            return nil
-        }
+        loadClipPlaybackStoreCacheIfNeeded()
+        return clipPlaybackStoreCache[url.path]
     }
 
     private func storeClipPlaybackState(_ state: ClipPlaybackState, for url: URL) {
-        let defaults = UserDefaults.standard
-        let existing: [String: ClipPlaybackState]
-        if let data = defaults.data(forKey: Self.clipPlaybackDefaultsKey),
-           let decoded = try? JSONDecoder().decode([String: ClipPlaybackState].self, from: data) {
-            existing = decoded
-        } else {
-            existing = [:]
-        }
-
-        var updated = existing
-        updated[url.path] = state
-
-        if let data = try? JSONEncoder().encode(updated) {
-            defaults.set(data, forKey: Self.clipPlaybackDefaultsKey)
-        }
+        loadClipPlaybackStoreCacheIfNeeded()
+        clipPlaybackStoreCache[url.path] = state
+        schedulePlaybackStorePersist()
     }
 
     private func restoreSelection(for url: URL, duration: PlaybackSeconds) {
@@ -807,9 +783,37 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        persistCurrentClipPlaybackStateIfNeeded()
+        persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         engine.pause()
         return true
+    }
+
+    private func updateTimelinePositionIfNeeded(_ positionSeconds: PlaybackSeconds) {
+        guard !inlineTimelineView.isDraggingPlayhead && !inlineTimelineView.isDraggingSelectionHandle else {
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let isRefreshWindowElapsed = (now - lastTimelineUpdateUptime) >= timelineRefreshInterval
+        let isLargePositionJump = abs(positionSeconds - inlineTimelineView.currentPosition) > 0.2
+        guard isRefreshWindowElapsed || isLargePositionJump else {
+            return
+        }
+        inlineTimelineView.currentPosition = positionSeconds
+        lastTimelineUpdateUptime = now
+    }
+
+    private func updateTimeLabelIfNeeded(_ positionSeconds: PlaybackSeconds, duration: PlaybackSeconds) {
+        let positionWholeSeconds = max(Int(positionSeconds.rounded(.down)), 0)
+        let durationWholeSeconds = max(Int(duration.rounded(.down)), 0)
+        guard
+            positionWholeSeconds != lastRenderedPositionWholeSeconds
+                || durationWholeSeconds != lastRenderedDurationWholeSeconds
+        else {
+            return
+        }
+        lastRenderedPositionWholeSeconds = positionWholeSeconds
+        lastRenderedDurationWholeSeconds = durationWholeSeconds
+        timeLabel.stringValue = "\(Self.format(positionSeconds)) / \(Self.format(duration))"
     }
 
     private static func format(_ seconds: PlaybackSeconds) -> String {
@@ -905,7 +909,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         handleLoopToggle(loopButton)
     }
 
-    private func persistCurrentClipPlaybackStateIfNeeded() {
+    private func persistCurrentClipPlaybackStateIfNeeded(flushImmediately: Bool = false) {
         guard let currentVideoURL else { return }
         persistCurrentSelectionIfNeeded()
         let state = ClipPlaybackState(
@@ -915,6 +919,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             isPlaying: engine.currentPlayer().rate != 0
         )
         storeClipPlaybackState(state, for: currentVideoURL)
+        if flushImmediately {
+            flushPendingPersistedStateWrites()
+        }
     }
 
     private func updateControlState(hasVideo: Bool) {
@@ -929,6 +936,77 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func loadClipSelectionStoreCacheIfNeeded() {
+        guard !hasLoadedClipSelectionStoreCache else { return }
+        hasLoadedClipSelectionStoreCache = true
+        let defaults = UserDefaults.standard
+        guard
+            let data = defaults.data(forKey: Self.clipSelectionDefaultsKey),
+            let decoded = try? JSONDecoder().decode([String: ClipSelection].self, from: data)
+        else {
+            clipSelectionStoreCache = [:]
+            return
+        }
+        clipSelectionStoreCache = decoded
+    }
+
+    private func loadClipPlaybackStoreCacheIfNeeded() {
+        guard !hasLoadedClipPlaybackStoreCache else { return }
+        hasLoadedClipPlaybackStoreCache = true
+        let defaults = UserDefaults.standard
+        guard
+            let data = defaults.data(forKey: Self.clipPlaybackDefaultsKey),
+            let decoded = try? JSONDecoder().decode([String: ClipPlaybackState].self, from: data)
+        else {
+            clipPlaybackStoreCache = [:]
+            return
+        }
+        clipPlaybackStoreCache = decoded
+    }
+
+    private func scheduleSelectionStorePersist() {
+        persistSelectionWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if let data = try? JSONEncoder().encode(self.clipSelectionStoreCache) {
+                UserDefaults.standard.set(data, forKey: Self.clipSelectionDefaultsKey)
+            }
+            self.persistSelectionWorkItem = nil
+        }
+        persistSelectionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
+    }
+
+    private func schedulePlaybackStorePersist() {
+        persistPlaybackWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if let data = try? JSONEncoder().encode(self.clipPlaybackStoreCache) {
+                UserDefaults.standard.set(data, forKey: Self.clipPlaybackDefaultsKey)
+            }
+            self.persistPlaybackWorkItem = nil
+        }
+        persistPlaybackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
+    }
+
+    private func flushPendingPersistedStateWrites() {
+        if let workItem = persistSelectionWorkItem {
+            workItem.cancel()
+            if let data = try? JSONEncoder().encode(clipSelectionStoreCache) {
+                UserDefaults.standard.set(data, forKey: Self.clipSelectionDefaultsKey)
+            }
+            persistSelectionWorkItem = nil
+        }
+        if let workItem = persistPlaybackWorkItem {
+            workItem.cancel()
+            if let data = try? JSONEncoder().encode(clipPlaybackStoreCache) {
+                UserDefaults.standard.set(data, forKey: Self.clipPlaybackDefaultsKey)
+            }
+            persistPlaybackWorkItem = nil
+        }
     }
 }
 
