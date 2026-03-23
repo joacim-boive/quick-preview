@@ -22,6 +22,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var hasStoredSelectionForCurrentClip = false
     private var lastKnownDuration: PlaybackSeconds = 0
     private var wasPlayingBeforePlayheadDrag = false
+    private var wasPlayingBeforeSelectionPreview = false
+    private var selectionPreviewReturnPosition: PlaybackSeconds?
     private var pendingRestoredPlayhead: PlaybackSeconds?
     private var pendingRestoredLoopEnabled: Bool?
     private var pendingRestoredIsPlaying: Bool?
@@ -328,6 +330,34 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         inlineTimelineView.onSelectionCommit = { [weak self] start, end in
             self?.handleInlineSelectionChange(start: start, end: end, shouldCommit: true)
         }
+        inlineTimelineView.onSelectionPreviewBegan = { [weak self] in
+            guard let self else { return }
+            guard self.engine.currentPlayer().currentItem != nil else { return }
+            self.selectionPreviewReturnPosition = self.engine.currentTimeSeconds()
+            self.wasPlayingBeforeSelectionPreview = self.engine.currentPlayer().rate != 0
+            if self.wasPlayingBeforeSelectionPreview {
+                self.engine.pause()
+            }
+            self.engine.beginScrubbing()
+        }
+        inlineTimelineView.onSelectionPreviewChanged = { [weak self] seconds in
+            guard let self else { return }
+            self.engine.scrub(to: seconds)
+            let duration = max(self.engine.currentDurationSeconds(), 0)
+            self.timeLabel.stringValue = "\(Self.format(seconds)) / \(Self.format(duration))"
+        }
+        inlineTimelineView.onSelectionPreviewEnded = { [weak self] in
+            guard let self else { return }
+            let returnPosition = self.selectionPreviewReturnPosition ?? self.inlineTimelineView.currentPosition
+            self.engine.endScrubbing(at: returnPosition)
+            if self.wasPlayingBeforeSelectionPreview {
+                self.engine.play()
+            }
+            self.wasPlayingBeforeSelectionPreview = false
+            self.selectionPreviewReturnPosition = nil
+            let duration = max(self.engine.currentDurationSeconds(), 0)
+            self.timeLabel.stringValue = "\(Self.format(returnPosition)) / \(Self.format(duration))"
+        }
 
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -445,7 +475,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
                 self.synchronizeSelectionState(for: position.duration)
                 self.applyPendingPlaybackRestorationIfPossible(duration: position.duration)
             }
-            if !self.inlineTimelineView.isDraggingPlayhead {
+            if !self.inlineTimelineView.isDraggingPlayhead && !self.inlineTimelineView.isDraggingSelectionHandle {
                 self.inlineTimelineView.currentPosition = position.seconds
             }
             self.timeLabel.stringValue = "\(Self.format(position.seconds)) / \(Self.format(position.duration))"
@@ -909,6 +939,16 @@ private final class InlineSelectionTimelineView: NSView {
         case endHandle
     }
 
+    private struct PendingPrecisionActivation {
+        let initialPoint: CGPoint
+        var currentPoint: CGPoint
+    }
+
+    private struct PrecisionZoomState {
+        let anchorValue: PlaybackSeconds
+        let anchorPointX: CGFloat
+    }
+
     var duration: PlaybackSeconds = 1 {
         didSet { updateLayerFrames() }
     }
@@ -930,9 +970,16 @@ private final class InlineSelectionTimelineView: NSView {
     var onSeekBegan: (() -> Void)?
     var onSelectionChange: ((PlaybackSeconds, PlaybackSeconds) -> Void)?
     var onSelectionCommit: ((PlaybackSeconds, PlaybackSeconds) -> Void)?
+    var onSelectionPreviewBegan: (() -> Void)?
+    var onSelectionPreviewChanged: ((PlaybackSeconds) -> Void)?
+    var onSelectionPreviewEnded: (() -> Void)?
 
     var isDraggingPlayhead: Bool {
         dragTarget == .playhead
+    }
+
+    var isDraggingSelectionHandle: Bool {
+        dragTarget == .startHandle || dragTarget == .endHandle
     }
 
     override var isFlipped: Bool {
@@ -946,11 +993,20 @@ private final class InlineSelectionTimelineView: NSView {
     }
 
     private var dragTarget: DragTarget?
+    private var pendingPrecisionActivation: PendingPrecisionActivation?
+    private var precisionZoomState: PrecisionZoomState?
+    private var precisionActivationWorkItem: DispatchWorkItem?
     private let trackLayer = CALayer()
     private let selectionLayer = CALayer()
     private let playheadLayer = CALayer()
     private let startHandleLayer = CALayer()
     private let endHandleLayer = CALayer()
+    private let precisionActivationDelay: TimeInterval = 1.0
+    private let precisionActivationMovementTolerance: CGFloat = 6
+    private let precisionZoomFactor: PlaybackSeconds = 10
+    private let minimumPrecisionVisibleDuration: PlaybackSeconds = 1
+    private let maximumPrecisionVisibleDuration: PlaybackSeconds = 20
+    private let precisionReferencePadding: PlaybackSeconds = 0.25
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -970,16 +1026,21 @@ private final class InlineSelectionTimelineView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard isControlEnabled else { return }
         let point = convert(event.locationInWindow, from: nil)
+        clearPrecisionInteractionState()
         dragTarget = resolvedDragTarget(for: point)
         if dragTarget == .playhead {
             onSeekBegan?()
+        } else {
+            onSelectionPreviewBegan?()
         }
+        beginPendingPrecisionActivation(at: point)
         updateDrag(with: point)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard dragTarget != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
+        cancelPendingPrecisionActivationIfNeeded(for: point)
         updateDrag(with: point)
     }
 
@@ -987,6 +1048,12 @@ private final class InlineSelectionTimelineView: NSView {
         guard dragTarget != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
         updateDrag(with: point, isFinal: true)
+        if dragTarget != .playhead {
+            clearPrecisionInteractionState()
+            onSelectionPreviewEnded?()
+        } else {
+            clearPrecisionInteractionState()
+        }
         dragTarget = nil
     }
 
@@ -1013,34 +1080,60 @@ private final class InlineSelectionTimelineView: NSView {
     }
 
     private func updateAppearance() {
-        trackLayer.backgroundColor = NSColor(calibratedRed: 0.18, green: 0.45, blue: 0.91, alpha: isControlEnabled ? 0.45 : 0.2).cgColor
-        selectionLayer.backgroundColor = NSColor(calibratedRed: 0.27, green: 0.58, blue: 0.98, alpha: isControlEnabled ? 0.95 : 0.35).cgColor
+        let isPrecisionActive = precisionZoomState != nil
+        trackLayer.backgroundColor = NSColor(
+            calibratedRed: 0.18,
+            green: 0.45,
+            blue: 0.91,
+            alpha: isControlEnabled ? (isPrecisionActive ? 0.68 : 0.45) : 0.2
+        ).cgColor
+        selectionLayer.backgroundColor = NSColor(
+            calibratedRed: 0.27,
+            green: 0.58,
+            blue: 0.98,
+            alpha: isControlEnabled ? (isPrecisionActive ? 1.0 : 0.95) : 0.35
+        ).cgColor
         playheadLayer.backgroundColor = NSColor.white.withAlphaComponent(isControlEnabled ? 0.95 : 0.5).cgColor
         startHandleLayer.backgroundColor = NSColor(calibratedWhite: 0.88, alpha: isControlEnabled ? 1 : 0.45).cgColor
         endHandleLayer.backgroundColor = NSColor(calibratedWhite: 0.88, alpha: isControlEnabled ? 1 : 0.45).cgColor
-        startHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? 0.2 : 0.1).cgColor
-        endHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? 0.2 : 0.1).cgColor
-        startHandleLayer.borderWidth = 1
-        endHandleLayer.borderWidth = 1
+        startHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? (isPrecisionActive ? 0.35 : 0.2) : 0.1).cgColor
+        endHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? (isPrecisionActive ? 0.35 : 0.2) : 0.1).cgColor
+        startHandleLayer.borderWidth = isPrecisionActive ? 1.5 : 1
+        endHandleLayer.borderWidth = isPrecisionActive ? 1.5 : 1
     }
 
     private func updateLayerFrames() {
         let trackRect = self.trackRect
+        let visibleRange = timelineVisibleRange()
         trackLayer.frame = CGRect(x: trackRect.minX, y: trackRect.minY, width: max(trackRect.width, 0), height: trackRect.height)
-        selectionLayer.frame = CGRect(
-            x: min(startX, endX),
-            y: trackRect.minY,
-            width: abs(endX - startX),
-            height: trackRect.height
-        )
+        let clippedSelectionStart = max(selectionStart, visibleRange.lowerBound)
+        let clippedSelectionEnd = min(selectionEnd, visibleRange.upperBound)
+        if clippedSelectionEnd > clippedSelectionStart {
+            selectionLayer.frame = CGRect(
+                x: xPosition(for: clippedSelectionStart),
+                y: trackRect.minY,
+                width: abs(xPosition(for: clippedSelectionEnd) - xPosition(for: clippedSelectionStart)),
+                height: trackRect.height
+            )
+            selectionLayer.isHidden = false
+        } else {
+            selectionLayer.frame = .zero
+            selectionLayer.isHidden = precisionZoomState != nil
+        }
 
-        playheadLayer.frame = CGRect(x: xPosition(for: currentPosition) - 2, y: 1, width: 4, height: 18)
+        let playheadWidth: CGFloat = precisionZoomState != nil ? 5 : 4
+        playheadLayer.frame = CGRect(x: xPosition(for: currentPosition) - (playheadWidth / 2), y: 1, width: playheadWidth, height: 18)
         startHandleLayer.frame = handleRect(at: startX)
         endHandleLayer.frame = handleRect(at: endX)
+        playheadLayer.isHidden = !isMarkerVisible(currentPosition, in: visibleRange, marker: .playhead)
+        startHandleLayer.isHidden = !isMarkerVisible(selectionStart, in: visibleRange, marker: .startHandle)
+        endHandleLayer.isHidden = !isMarkerVisible(selectionEnd, in: visibleRange, marker: .endHandle)
+        updateLayerOrdering()
     }
 
     private var trackRect: CGRect {
-        CGRect(x: 18, y: 8, width: max(bounds.width - 36, 0), height: 8)
+        let height: CGFloat = precisionZoomState != nil ? 10 : 8
+        return CGRect(x: 18, y: 9 - (height / 2), width: max(bounds.width - 36, 0), height: height)
     }
 
     private var startX: CGFloat {
@@ -1052,16 +1145,18 @@ private final class InlineSelectionTimelineView: NSView {
     }
 
     private func xPosition(for value: PlaybackSeconds) -> CGFloat {
-        guard duration > 0 else { return trackRect.minX }
-        let progress = min(max(value / duration, 0), 1)
+        let visibleRange = timelineVisibleRange()
+        let visibleDuration = max(visibleRange.upperBound - visibleRange.lowerBound, 0.0001)
+        let progress = min(max((value - visibleRange.lowerBound) / visibleDuration, 0), 1)
         return trackRect.minX + (trackRect.width * progress)
     }
 
     private func seconds(for point: CGPoint) -> PlaybackSeconds {
-        guard duration > 0 else { return 0 }
+        let visibleRange = timelineVisibleRange()
+        let visibleDuration = max(visibleRange.upperBound - visibleRange.lowerBound, 0)
         let clampedX = min(max(point.x, trackRect.minX), trackRect.maxX)
         let progress = (clampedX - trackRect.minX) / max(trackRect.width, 1)
-        return PlaybackSeconds(progress) * duration
+        return visibleRange.lowerBound + (PlaybackSeconds(progress) * visibleDuration)
     }
 
     private func handleRect(at x: CGFloat) -> CGRect {
@@ -1070,6 +1165,160 @@ private final class InlineSelectionTimelineView: NSView {
 
     private func playheadRect(at x: CGFloat) -> CGRect {
         CGRect(x: x - 4, y: 0, width: 8, height: 20)
+    }
+
+    private func currentValue(for target: DragTarget) -> PlaybackSeconds {
+        switch target {
+        case .playhead:
+            return currentPosition
+        case .startHandle:
+            return selectionStart
+        case .endHandle:
+            return selectionEnd
+        }
+    }
+
+    private func beginPendingPrecisionActivation(at point: CGPoint) {
+        pendingPrecisionActivation = PendingPrecisionActivation(initialPoint: point, currentPoint: point)
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.activatePrecisionMode()
+        }
+        precisionActivationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + precisionActivationDelay, execute: workItem)
+    }
+
+    private func cancelPendingPrecisionActivationIfNeeded(for point: CGPoint) {
+        guard let pendingPrecisionActivation, precisionZoomState == nil else { return }
+        let deltaX = point.x - pendingPrecisionActivation.initialPoint.x
+        let deltaY = point.y - pendingPrecisionActivation.initialPoint.y
+        let distance = hypot(deltaX, deltaY)
+        guard distance > precisionActivationMovementTolerance else {
+            self.pendingPrecisionActivation?.currentPoint = point
+            return
+        }
+        cancelPendingPrecisionActivation()
+    }
+
+    private func cancelPendingPrecisionActivation() {
+        precisionActivationWorkItem?.cancel()
+        precisionActivationWorkItem = nil
+        pendingPrecisionActivation = nil
+    }
+
+    private func activatePrecisionMode() {
+        guard let dragTarget, let pendingPrecisionActivation else { return }
+        precisionActivationWorkItem = nil
+        precisionZoomState = PrecisionZoomState(
+            anchorValue: currentValue(for: dragTarget),
+            anchorPointX: min(max(pendingPrecisionActivation.currentPoint.x, trackRect.minX), trackRect.maxX)
+        )
+        self.pendingPrecisionActivation = nil
+        updateAppearance()
+        updateLayerFrames()
+    }
+
+    private func clearPrecisionInteractionState() {
+        cancelPendingPrecisionActivation()
+        precisionZoomState = nil
+        updateAppearance()
+        updateLayerFrames()
+    }
+
+    private func timelineVisibleRange() -> ClosedRange<PlaybackSeconds> {
+        guard duration > 0 else { return 0...1 }
+        guard let precisionZoomState, let dragTarget else { return 0...duration }
+
+        let baseVisibleDuration = min(
+            max(duration / precisionZoomFactor, minimumPrecisionVisibleDuration),
+            min(duration, maximumPrecisionVisibleDuration)
+        )
+        let trackWidth = max(trackRect.width, 1)
+        let anchorProgress = min(max((precisionZoomState.anchorPointX - trackRect.minX) / trackWidth, 0), 1)
+        let visibleDuration = precisionVisibleDuration(
+            for: precisionZoomState.anchorValue,
+            anchorProgress: anchorProgress,
+            dragTarget: dragTarget,
+            baseVisibleDuration: baseVisibleDuration
+        )
+        guard visibleDuration < duration else { return 0...duration }
+
+        let proposedStart = precisionZoomState.anchorValue - (visibleDuration * PlaybackSeconds(anchorProgress))
+
+        let maximumStart = max(duration - visibleDuration, 0)
+        let clampedStart = min(max(proposedStart, 0), maximumStart)
+        let clampedEnd = min(clampedStart + visibleDuration, duration)
+        return clampedStart...clampedEnd
+    }
+
+    private func precisionVisibleDuration(
+        for anchorValue: PlaybackSeconds,
+        anchorProgress: CGFloat,
+        dragTarget: DragTarget,
+        baseVisibleDuration: PlaybackSeconds
+    ) -> PlaybackSeconds {
+        guard let nearestReferenceValue = nearestReferenceMarker(for: dragTarget, anchorValue: anchorValue)?.value else {
+            return baseVisibleDuration
+        }
+
+        let delta = abs(nearestReferenceValue - anchorValue)
+        let targetPadding = min(precisionReferencePadding, baseVisibleDuration * 0.15)
+        let desiredDuration = max(delta + (targetPadding * 2), minimumPrecisionVisibleDuration)
+
+        let referenceIsOnRight = nearestReferenceValue >= anchorValue
+        let availableProgress = referenceIsOnRight
+            ? PlaybackSeconds(max(1 - anchorProgress, 0.0001))
+            : PlaybackSeconds(max(anchorProgress, 0.0001))
+        let minimumDurationToKeepReferenceVisible = (delta + targetPadding) / availableProgress
+        let preferredDuration = min(baseVisibleDuration, desiredDuration)
+        return min(
+            max(preferredDuration, minimumDurationToKeepReferenceVisible, minimumPrecisionVisibleDuration),
+            min(duration, maximumPrecisionVisibleDuration)
+        )
+    }
+
+    private func nearestReferenceMarker(
+        for dragTarget: DragTarget,
+        anchorValue: PlaybackSeconds
+    ) -> (target: DragTarget, value: PlaybackSeconds)? {
+        let referenceMarkers: [(target: DragTarget, value: PlaybackSeconds)]
+        switch dragTarget {
+        case .playhead:
+            referenceMarkers = [(.startHandle, selectionStart), (.endHandle, selectionEnd)]
+        case .startHandle:
+            referenceMarkers = [(.playhead, currentPosition), (.endHandle, selectionEnd)]
+        case .endHandle:
+            referenceMarkers = [(.playhead, currentPosition), (.startHandle, selectionStart)]
+        }
+
+        return referenceMarkers.min { lhs, rhs in
+            abs(lhs.value - anchorValue) < abs(rhs.value - anchorValue)
+        }
+    }
+
+    private func updateLayerOrdering() {
+        trackLayer.zPosition = 0
+        selectionLayer.zPosition = 1
+        playheadLayer.zPosition = 3
+        startHandleLayer.zPosition = dragTarget == .startHandle ? 4 : 2
+        endHandleLayer.zPosition = dragTarget == .endHandle ? 4 : 2
+    }
+
+    private func isMarkerVisible(
+        _ value: PlaybackSeconds,
+        in visibleRange: ClosedRange<PlaybackSeconds>,
+        marker: DragTarget
+    ) -> Bool {
+        if dragTarget == marker {
+            return true
+        }
+        guard precisionZoomState != nil else {
+            return true
+        }
+        if nearestReferenceMarker(for: dragTarget ?? marker, anchorValue: currentValue(for: dragTarget ?? marker))?.target != marker {
+            return false
+        }
+        let epsilon: PlaybackSeconds = 0.0001
+        return value >= (visibleRange.lowerBound - epsilon) && value <= (visibleRange.upperBound + epsilon)
     }
 
     private func resolvedDragTarget(for point: CGPoint) -> DragTarget {
@@ -1104,6 +1353,7 @@ private final class InlineSelectionTimelineView: NSView {
             let updatedStart = min(proposedSeconds, selectionEnd)
             selectionStart = updatedStart
             updateLayerFrames()
+            onSelectionPreviewChanged?(updatedStart)
             if isFinal {
                 onSelectionCommit?(selectionStart, selectionEnd)
             } else {
@@ -1113,6 +1363,7 @@ private final class InlineSelectionTimelineView: NSView {
             let updatedEnd = max(proposedSeconds, selectionStart)
             selectionEnd = updatedEnd
             updateLayerFrames()
+            onSelectionPreviewChanged?(updatedEnd)
             if isFinal {
                 onSelectionCommit?(selectionStart, selectionEnd)
             } else {
