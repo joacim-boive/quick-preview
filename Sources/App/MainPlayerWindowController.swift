@@ -7,11 +7,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let playerView = PlayerSurfaceView(frame: .zero)
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
-    private let loopButton = NSButton(checkboxWithTitle: "Loop", target: nil, action: nil)
     private let maxVolumeGain: Double = 3.0 // 300%
     private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 3.0, target: nil, action: nil)
     private let volumePercentLabel = NSTextField(labelWithString: "100%")
-    private let rotationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse File > Open... or File > Open Finder Selection...")
 
     private var escMonitor: Any?
@@ -19,6 +17,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var selectionEnd: PlaybackSeconds = 0
     private var currentVideoURL: URL?
     private var currentRotationDegrees = 0
+    private var isLoopEnabled = true
     private var hasStoredSelectionForCurrentClip = false
     private var lastKnownDuration: PlaybackSeconds = 0
     private var lastRenderedPositionWholeSeconds = -1
@@ -101,7 +100,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         pendingRestoredIsPlaying = nil
         let storedRotation = storedRotationDegrees(for: normalizedURL)
         applyRotationDegrees(storedRotation)
-        rotationPopup.isEnabled = true
         updateWindowTitle()
         restoreSelection(for: normalizedURL, duration: engine.currentDurationSeconds())
         restoreClipPlaybackState(for: normalizedURL, duration: engine.currentDurationSeconds())
@@ -175,6 +173,35 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func flushPersistedStateWrites() {
         flushPendingPersistedStateWrites()
+    }
+
+    func loopEnabled() -> Bool {
+        isLoopEnabled
+    }
+
+    func setLoopEnabled(_ enabled: Bool) {
+        isLoopEnabled = enabled
+        applyLoopPreferenceForCurrentClip()
+        persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    func rotationDegrees() -> Int {
+        currentRotationDegrees
+    }
+
+    func setRotationDegrees(_ degrees: Int) {
+        applyRotationDegrees(degrees)
+        guard let currentVideoURL else { return }
+        storeRotationDegrees(currentRotationDegrees, for: currentVideoURL)
+    }
+
+    func rotateClockwise() {
+        guard let currentIndex = allowedRotationDegrees.firstIndex(of: currentRotationDegrees) else {
+            setRotationDegrees(0)
+            return
+        }
+        let nextIndex = (currentIndex + 1) % allowedRotationDegrees.count
+        setRotationDegrees(allowedRotationDegrees[nextIndex])
     }
 
     private func selectedFinderFileURL(activateFinder: Bool) throws -> URL {
@@ -385,10 +412,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         volumePercentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         volumePercentLabel.alignment = .right
 
-        loopButton.translatesAutoresizingMaskIntoConstraints = false
-        loopButton.target = self
-        loopButton.action = #selector(handleLoopToggle(_:))
-
         volumeSlider.translatesAutoresizingMaskIntoConstraints = false
         volumeSlider.target = self
         volumeSlider.action = #selector(handleVolumeChanged(_:))
@@ -397,78 +420,63 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.setAudioGain(1)
         updateVolumePercentLabel(for: 1)
 
-        rotationPopup.translatesAutoresizingMaskIntoConstraints = false
-        rotationPopup.target = self
-        rotationPopup.action = #selector(handleRotationChanged(_:))
-        rotationPopup.removeAllItems()
-        rotationPopup.addItems(withTitles: allowedRotationDegrees.map { "\($0)°" })
-        rotationPopup.selectItem(at: 0)
-        rotationPopup.isEnabled = false
-
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyStateLabel.alignment = .center
         emptyStateLabel.font = .systemFont(ofSize: 20, weight: .medium)
         emptyStateLabel.textColor = .secondaryLabelColor
 
-        let topControls = NSStackView(
-            views: [
-                loopButton,
-                rotationPopup
-            ]
-        )
-        topControls.orientation = .horizontal
-        topControls.alignment = .centerY
-        topControls.distribution = .fill
-        topControls.spacing = 10
-        topControls.translatesAutoresizingMaskIntoConstraints = false
+        let volumeControls = NSStackView(views: [volumeSlider, volumePercentLabel])
+        volumeControls.orientation = .horizontal
+        volumeControls.alignment = .centerY
+        volumeControls.distribution = .fill
+        volumeControls.spacing = 4
+        volumeControls.translatesAutoresizingMaskIntoConstraints = false
+        volumeControls.setContentHuggingPriority(.required, for: .horizontal)
+        volumeControls.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let bottomControls = NSStackView(
-            views: [
-                volumeSlider,
-                volumePercentLabel,
-                timeLabel
-            ]
-        )
-        bottomControls.orientation = .horizontal
-        bottomControls.alignment = .centerY
-        bottomControls.distribution = .fill
-        bottomControls.spacing = 10
-        bottomControls.translatesAutoresizingMaskIntoConstraints = false
+        let timeControls = NSStackView(views: [timeLabel])
+        timeControls.orientation = .horizontal
+        timeControls.alignment = .centerY
+        timeControls.distribution = .fill
+        timeControls.spacing = 0
+        timeControls.translatesAutoresizingMaskIntoConstraints = false
+        timeControls.setContentHuggingPriority(.required, for: .horizontal)
+        timeControls.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let controls = NSStackView(views: [topControls, bottomControls])
-        controls.orientation = .vertical
-        controls.alignment = .leading
-        controls.distribution = .fill
-        controls.spacing = 8
-        controls.translatesAutoresizingMaskIntoConstraints = false
+        inlineTimelineView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        inlineTimelineView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let controlsRow = NSStackView(views: [inlineTimelineView, volumeControls, timeControls])
+        controlsRow.orientation = .horizontal
+        controlsRow.alignment = .centerY
+        controlsRow.distribution = .fill
+        controlsRow.spacing = 16
+        controlsRow.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(playerView)
         content.addSubview(emptyStateLabel)
-        content.addSubview(inlineTimelineView)
-        content.addSubview(controls)
+        content.addSubview(controlsRow)
 
         NSLayoutConstraint.activate([
             playerView.topAnchor.constraint(equalTo: content.topAnchor),
             playerView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
-            inlineTimelineView.topAnchor.constraint(equalTo: playerView.bottomAnchor, constant: 10),
-            inlineTimelineView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            inlineTimelineView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            inlineTimelineView.heightAnchor.constraint(equalToConstant: 58),
+            controlsRow.topAnchor.constraint(equalTo: playerView.bottomAnchor, constant: 6),
+            controlsRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+            controlsRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
+            controlsRow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -8),
 
-            controls.topAnchor.constraint(equalTo: inlineTimelineView.bottomAnchor, constant: 8),
-            controls.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            controls.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            controls.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+            inlineTimelineView.heightAnchor.constraint(equalToConstant: 36),
 
-            playerView.heightAnchor.constraint(greaterThanOrEqualToConstant: 420),
+            playerView.heightAnchor.constraint(greaterThanOrEqualToConstant: 460),
 
             emptyStateLabel.centerXAnchor.constraint(equalTo: playerView.centerXAnchor),
             emptyStateLabel.centerYAnchor.constraint(equalTo: playerView.centerYAnchor),
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: playerView.leadingAnchor, constant: 16),
             emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: playerView.trailingAnchor, constant: -16),
-            volumeSlider.widthAnchor.constraint(equalToConstant: 160)
+            volumeSlider.widthAnchor.constraint(equalToConstant: 110),
+            volumePercentLabel.widthAnchor.constraint(equalToConstant: 48)
         ])
 
         updateControlState(hasVideo: false)
@@ -500,11 +508,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             guard let self else { return }
             switch mode {
             case .off:
-                self.loopButton.state = .off
+                self.isLoopEnabled = false
             case .full:
-                self.loopButton.state = .on
+                self.isLoopEnabled = true
             case .range:
-                self.loopButton.state = .on
+                self.isLoopEnabled = true
             }
         }
     }
@@ -524,6 +532,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             engine.handle(command: .togglePlayPause)
         case 37:
             toggleSelectedLoop()
+        case 15:
+            rotateClockwise()
         case 123:
             let amount = isShift ? engine.coarseStepAmount() : engine.fineStepAmount()
             engine.handle(command: .seekBy(seconds: -amount))
@@ -564,24 +574,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         window?.orderOut(nil)
     }
 
-    @objc
-    private func handleLoopToggle(_ sender: NSButton) {
-        if sender.state == .on {
-            guard applySelectedLoop(shouldStartPlayback: true) else {
-                sender.state = .off
-                showInfoAlert(
-                    title: "Selection Not Ready",
-                    message: "Adjust the start and end scrubbers so the selected segment has some duration before looping."
-                )
-                return
-            }
-            persistCurrentClipPlaybackStateIfNeeded()
-            return
-        }
-        engine.clearLoop()
-        persistCurrentClipPlaybackStateIfNeeded()
-    }
-
     private func handleInlineSelectionChange(start: PlaybackSeconds, end: PlaybackSeconds, shouldCommit: Bool) {
         let duration = engine.currentDurationSeconds()
         selectionStart = start
@@ -597,16 +589,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.setAudioGain(Float(sender.doubleValue))
         updateVolumePercentLabel(for: sender.doubleValue)
         persistCurrentClipPlaybackStateIfNeeded()
-    }
-
-    @objc
-    private func handleRotationChanged(_ sender: NSPopUpButton) {
-        let selectedIndex = max(sender.indexOfSelectedItem, 0)
-        guard selectedIndex < allowedRotationDegrees.count else { return }
-        let degrees = allowedRotationDegrees[selectedIndex]
-        applyRotationDegrees(degrees)
-        guard let currentVideoURL else { return }
-        storeRotationDegrees(degrees, for: currentVideoURL)
     }
 
     private func handlePlayerSurfaceClick() {
@@ -648,9 +630,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         guard allowedRotationDegrees.contains(degrees) else { return }
         currentRotationDegrees = degrees
         playerView.setRotationDegrees(degrees)
-        if let selectedIndex = allowedRotationDegrees.firstIndex(of: degrees) {
-            rotationPopup.selectItem(at: selectedIndex)
-        }
     }
 
     private func storedRotationDegrees(for url: URL) -> Int {
@@ -730,7 +709,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             engine.setAudioGain(1)
             updateVolumePercentLabel(for: 1)
             pendingRestoredPlayhead = nil
-            pendingRestoredLoopEnabled = false
+            pendingRestoredLoopEnabled = true
             pendingRestoredIsPlaying = true
         }
 
@@ -760,16 +739,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
         if let pendingRestoredLoopEnabled {
             self.pendingRestoredLoopEnabled = nil
-            if pendingRestoredLoopEnabled {
-                loopButton.state = .on
-                if !applySelectedLoop(shouldStartPlayback: false) {
-                    loopButton.state = .off
-                    engine.clearLoop()
-                }
-            } else {
-                loopButton.state = .off
-                engine.clearLoop()
-            }
+            isLoopEnabled = pendingRestoredLoopEnabled
+            applyLoopPreferenceForCurrentClip()
         }
 
         if let pendingRestoredIsPlaying {
@@ -885,7 +856,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshLoopForUpdatedSelection(shouldSeekIntoRange: Bool) {
-        guard loopButton.state == .on else { return }
+        guard isLoopEnabled else { return }
         guard applySelectedLoop(shouldStartPlayback: false) else {
             engine.clearLoop()
             return
@@ -898,15 +869,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func toggleSelectedLoop() {
-        if loopButton.state == .on {
-            loopButton.state = .off
-            engine.clearLoop()
-            persistCurrentClipPlaybackStateIfNeeded()
-            return
-        }
-
-        loopButton.state = .on
-        handleLoopToggle(loopButton)
+        setLoopEnabled(!isLoopEnabled)
     }
 
     private func persistCurrentClipPlaybackStateIfNeeded(flushImmediately: Bool = false) {
@@ -915,7 +878,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let state = ClipPlaybackState(
             playhead: max(engine.currentTimeSeconds(), 0),
             volume: min(max(volumeSlider.doubleValue, 0), maxVolumeGain),
-            isLoopEnabled: loopButton.state == .on,
+            isLoopEnabled: isLoopEnabled,
             isPlaying: engine.currentPlayer().rate != 0
         )
         storeClipPlaybackState(state, for: currentVideoURL)
@@ -926,7 +889,17 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateControlState(hasVideo: Bool) {
         inlineTimelineView.isControlEnabled = hasVideo
-        loopButton.isEnabled = hasVideo
+    }
+
+    private func applyLoopPreferenceForCurrentClip() {
+        guard engine.currentPlayer().currentItem != nil else { return }
+        if isLoopEnabled {
+            if !applySelectedLoop(shouldStartPlayback: false) {
+                engine.setLoopFull(enabled: true)
+            }
+            return
+        }
+        engine.clearLoop()
     }
 
     private func showInfoAlert(title: String, message: String) {
@@ -1200,7 +1173,12 @@ private final class InlineSelectionTimelineView: NSView {
         }
 
         let playheadWidth: CGFloat = precisionZoomState != nil ? 5 : 4
-        playheadLayer.frame = CGRect(x: xPosition(for: currentPosition) - (playheadWidth / 2), y: 1, width: playheadWidth, height: 18)
+        playheadLayer.frame = CGRect(
+            x: xPosition(for: currentPosition) - (playheadWidth / 2),
+            y: trackRect.midY - 9,
+            width: playheadWidth,
+            height: 18
+        )
         startHandleLayer.frame = handleRect(at: startX)
         endHandleLayer.frame = handleRect(at: endX)
         playheadLayer.isHidden = !isMarkerVisible(currentPosition, in: visibleRange, marker: .playhead)
@@ -1211,7 +1189,12 @@ private final class InlineSelectionTimelineView: NSView {
 
     private var trackRect: CGRect {
         let height: CGFloat = precisionZoomState != nil ? 10 : 8
-        return CGRect(x: 18, y: 9 - (height / 2), width: max(bounds.width - 36, 0), height: height)
+        return CGRect(
+            x: 18,
+            y: (bounds.height - height) / 2,
+            width: max(bounds.width - 36, 0),
+            height: height
+        )
     }
 
     private var startX: CGFloat {
@@ -1238,11 +1221,11 @@ private final class InlineSelectionTimelineView: NSView {
     }
 
     private func handleRect(at x: CGFloat) -> CGRect {
-        CGRect(x: x - 8, y: 0, width: 16, height: 28)
+        CGRect(x: x - 8, y: trackRect.midY - 14, width: 16, height: 28)
     }
 
     private func playheadRect(at x: CGFloat) -> CGRect {
-        CGRect(x: x - 4, y: 0, width: 8, height: 20)
+        CGRect(x: x - 4, y: trackRect.midY - 10, width: 8, height: 20)
     }
 
     private func currentValue(for target: DragTarget) -> PlaybackSeconds {

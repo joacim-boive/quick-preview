@@ -1,7 +1,7 @@
 import Cocoa
 import UniformTypeIdentifiers
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let hotkeyManager = GlobalHotkeyManager()
     private var windowController: MainPlayerWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
@@ -10,6 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         qos: .utility
     )
     private var isSelectionCheckInProgress = false
+    private let loopMenuItemTag = 4101
+    private let rotateClockwiseMenuItemTag = 4102
+    private let rotationMenuItemBaseTag = 4200
+    private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -98,6 +102,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = sender
     }
 
+    @objc
+    private func handleLoopFromMenu(_ sender: Any?) {
+        let controller = ensureWindowController()
+        controller.setLoopEnabled(!controller.loopEnabled())
+        _ = sender
+    }
+
+    @objc
+    private func handleRotateClockwiseFromMenu(_ sender: Any?) {
+        ensureWindowController().rotateClockwise()
+        _ = sender
+    }
+
+    @objc
+    private func handleSetRotationFromMenu(_ sender: NSMenuItem) {
+        let rotationDegrees = sender.tag - rotationMenuItemBaseTag
+        ensureWindowController().setRotationDegrees(rotationDegrees)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let controller = ensureWindowController()
+        switch menuItem.tag {
+        case loopMenuItemTag:
+            menuItem.state = controller.loopEnabled() ? .on : .off
+            return controller.hasLoadedVideo()
+        case rotateClockwiseMenuItemTag:
+            return controller.hasLoadedVideo()
+        default:
+            let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
+            if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
+                let rotationDegrees = menuItem.tag - rotationMenuItemBaseTag
+                menuItem.state = rotationDegrees == controller.rotationDegrees() ? .on : .off
+                return controller.hasLoadedVideo()
+            }
+            return true
+        }
+    }
+
     private func openFromSchemeURL(_ url: URL) {
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -156,6 +198,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(openFinderSelectionItem)
         fileMenuItem.submenu = fileMenu
+
+        let playbackMenuItem = NSMenuItem(title: "Playback", action: nil, keyEquivalent: "")
+        mainMenu.addItem(playbackMenuItem)
+
+        let playbackMenu = NSMenu(title: "Playback")
+        let loopItem = NSMenuItem(
+            title: "Loop",
+            action: #selector(handleLoopFromMenu(_:)),
+            keyEquivalent: "l"
+        )
+        loopItem.target = self
+        loopItem.tag = loopMenuItemTag
+        loopItem.keyEquivalentModifierMask = [.command]
+        playbackMenu.addItem(loopItem)
+
+        let rotateClockwiseItem = NSMenuItem(
+            title: "Rotate Clockwise",
+            action: #selector(handleRotateClockwiseFromMenu(_:)),
+            keyEquivalent: "r"
+        )
+        rotateClockwiseItem.target = self
+        rotateClockwiseItem.tag = rotateClockwiseMenuItemTag
+        rotateClockwiseItem.keyEquivalentModifierMask = []
+        playbackMenu.addItem(rotateClockwiseItem)
+
+        let rotationMenuItem = NSMenuItem(title: "Rotation", action: nil, keyEquivalent: "")
+        let rotationMenu = NSMenu(title: "Rotation")
+        for degrees in allowedRotationDegrees {
+            let item = NSMenuItem(
+                title: "\(degrees)°",
+                action: #selector(handleSetRotationFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.tag = rotationMenuItemBaseTag + degrees
+            rotationMenu.addItem(item)
+        }
+        rotationMenuItem.submenu = rotationMenu
+        playbackMenu.addItem(rotationMenuItem)
+        playbackMenuItem.submenu = playbackMenu
 
         NSApp.mainMenu = mainMenu
     }
