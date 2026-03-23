@@ -475,7 +475,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             emptyStateLabel.centerYAnchor.constraint(equalTo: playerView.centerYAnchor),
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: playerView.leadingAnchor, constant: 16),
             emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: playerView.trailingAnchor, constant: -16),
-            volumeSlider.widthAnchor.constraint(equalToConstant: 110)
+            volumeSlider.widthAnchor.constraint(equalToConstant: 110),
+            volumePercentLabel.widthAnchor.constraint(equalToConstant: 48)
         ])
 
         updateControlState(hasVideo: false)
