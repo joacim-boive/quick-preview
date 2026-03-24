@@ -60,6 +60,18 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let volume: Double
         let isLoopEnabled: Bool
         let isPlaying: Bool
+        let windowFrame: ClipWindowFrame?
+    }
+
+    private struct ClipWindowFrame: Codable {
+        let originX: CGFloat
+        let originY: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+
+        var rect: NSRect {
+            NSRect(x: originX, y: originY, width: width, height: height)
+        }
     }
 
     enum FinderSelectionState {
@@ -749,6 +761,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let restored = storedClipPlaybackState(for: url)
 
         if let restored {
+            restoreWindowFrameIfNeeded(restored.windowFrame)
             let clampedVolume = min(max(restored.volume, 0), maxVolumeGain)
             volumeSlider.doubleValue = clampedVolume
             engine.setAudioGain(Float(clampedVolume))
@@ -819,6 +832,16 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         engine.pause()
         return true
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        _ = notification
+        persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        _ = notification
+        persistCurrentClipPlaybackStateIfNeeded()
     }
 
     func openBookmark(_ bookmark: Bookmark) {
@@ -967,7 +990,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             playhead: max(engine.currentTimeSeconds(), 0),
             volume: min(max(volumeSlider.doubleValue, 0), maxVolumeGain),
             isLoopEnabled: isLoopEnabled,
-            isPlaying: engine.currentPlayer().rate != 0
+            isPlaying: engine.currentPlayer().rate != 0,
+            windowFrame: currentPersistableWindowFrame()
         )
         storeClipPlaybackState(state, for: currentVideoURL)
         if flushImmediately {
@@ -998,6 +1022,40 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func currentPersistableWindowFrame() -> ClipWindowFrame? {
+        guard let window else { return nil }
+        let frame = window.frame
+        guard frame.width.isFinite, frame.height.isFinite, frame.width > 0, frame.height > 0 else {
+            return nil
+        }
+        return ClipWindowFrame(
+            originX: frame.origin.x,
+            originY: frame.origin.y,
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    private func restoreWindowFrameIfNeeded(_ storedFrame: ClipWindowFrame?) {
+        guard let window, let storedFrame else { return }
+        let minimumSize = window.minSize
+        var frame = storedFrame.rect
+        frame.size.width = max(frame.width, minimumSize.width)
+        frame.size.height = max(frame.height, minimumSize.height)
+
+        if let screen = window.screen ?? NSScreen.main {
+            let visibleFrame = screen.visibleFrame
+            let maxWidth = max(visibleFrame.width, minimumSize.width)
+            let maxHeight = max(visibleFrame.height, minimumSize.height)
+            frame.size.width = min(frame.width, maxWidth)
+            frame.size.height = min(frame.height, maxHeight)
+            frame.origin.x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - frame.width)
+            frame.origin.y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - frame.height)
+        }
+
+        window.setFrame(frame, display: true)
     }
 
     private func loadClipSelectionStoreCacheIfNeeded() {
