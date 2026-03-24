@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let loopMenuItemTag = 4101
     private let rotationMenuItemBaseTag = 4200
     private let protectedMediaMenuItemTag = 4300
+    private let paranoidModeMenuItemTag = 4301
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -137,18 +138,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
+        unlockProtectedMediaSession()
+    }
+
+    @objc
+    private func handleParanoidMode(_ sender: Any?) {
+        _ = sender
+
+        guard protectedBookmarksSessionController.isUnlocked else {
+            showInfoAlert(
+                title: "Protected Media Locked",
+                message: "Unlock protected media first to change paranoid mode."
+            )
+            return
+        }
+
+        if protectedBookmarksSessionController.isParanoidModeEnabled {
+            disableParanoidMode()
+        } else {
+            enableParanoidMode()
+        }
+    }
+
+    private func unlockProtectedMediaSession() {
         let controller = ensureBookmarksWindowController()
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        protectedBookmarksSessionController.authenticate(
+        if protectedBookmarksSessionController.isParanoidModeEnabled,
+           protectedBookmarksSessionController.isAwaitingParanoidPassword {
+            guard let password = promptForParanoidPassword(
+                title: "Enter Paranoid Mode Password",
+                message: "Enter your paranoid mode password to reveal protected bookmarks.",
+                actionTitle: "Unlock"
+            ) else {
+                return
+            }
+
+            guard protectedBookmarksSessionController.unlockWithParanoidPassword(password) else {
+                return
+            }
+
+            showBookmarksWindow(selecting: nil)
+            return
+        }
+
+        protectedBookmarksSessionController.authenticateWithDeviceOwner(
             reason: "Unlock protected bookmarks in QuickPreview."
         ) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success:
-                self.showBookmarksWindow(selecting: nil)
+                if self.protectedBookmarksSessionController.isParanoidModeEnabled {
+                    self.protectedBookmarksSessionController.beginParanoidPasswordStep()
+                } else {
+                    self.protectedBookmarksSessionController.unlock()
+                    self.showBookmarksWindow(selecting: nil)
+                }
             case .cancelled:
                 break
             case .unavailable:
@@ -165,6 +212,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    private func enableParanoidMode() {
+        guard let password = promptForNewParanoidModePassword() else {
+            return
+        }
+
+        protectedBookmarksSessionController.enableParanoidMode(password: password)
+        showInfoAlert(
+            title: "Paranoid Mode Enabled",
+            message: "Protected media now requires macOS authentication and your paranoid mode password to unlock. If you forget this password, it cannot be recovered."
+        )
+    }
+
+    private func disableParanoidMode() {
+        guard let password = promptForParanoidPassword(
+            title: "Disable Paranoid Mode",
+            message: "Enter the paranoid mode password to disable this setting.",
+            actionTitle: "Disable"
+        ) else {
+            return
+        }
+
+        guard protectedBookmarksSessionController.disableParanoidMode(password: password) else {
+            showInfoAlert(
+                title: "Incorrect Password",
+                message: "The paranoid mode password you entered was incorrect."
+            )
+            return
+        }
+
+        showInfoAlert(
+            title: "Paranoid Mode Disabled",
+            message: "Protected media will now unlock with macOS authentication only."
+        )
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let controller = ensureWindowController()
         switch menuItem.tag {
@@ -175,6 +257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let isUnlocked = protectedBookmarksSessionController.isUnlocked
             menuItem.title = isUnlocked ? "Lock Protected Media" : "Unlock Protected Media..."
             return true
+        case paranoidModeMenuItemTag:
+            menuItem.title = protectedBookmarksSessionController.isParanoidModeEnabled
+                ? "Disable Paranoid Mode..."
+                : "Enable Paranoid Mode..."
+            return protectedBookmarksSessionController.isUnlocked
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
@@ -347,6 +434,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         protectedMediaItem.target = self
         protectedMediaItem.tag = protectedMediaMenuItemTag
         playbackMenu.addItem(protectedMediaItem)
+
+        let paranoidModeItem = NSMenuItem(
+            title: "Enable Paranoid Mode...",
+            action: #selector(handleParanoidMode(_:)),
+            keyEquivalent: ""
+        )
+        paranoidModeItem.target = self
+        paranoidModeItem.tag = paranoidModeMenuItemTag
+        playbackMenu.addItem(paranoidModeItem)
         playbackMenuItem.submenu = playbackMenu
 
         let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
@@ -456,6 +552,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func promptForNewParanoidModePassword() -> String? {
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        let confirmField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        passwordField.placeholderString = "Password"
+        confirmField.placeholderString = "Confirm password"
+
+        let warningLabel = NSTextField(wrappingLabelWithString: "Warning: if you forget this password, QuickPreview cannot recover it.")
+        warningLabel.textColor = .systemRed
+        warningLabel.maximumNumberOfLines = 0
+
+        let stack = NSStackView(views: [
+            NSTextField(labelWithString: "Set a paranoid mode password."),
+            passwordField,
+            confirmField,
+            warningLabel
+        ])
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 132))
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        let alert = NSAlert()
+        alert.messageText = "Enable Paranoid Mode"
+        alert.informativeText = "Paranoid mode adds a password after macOS authentication every time you unlock protected media."
+        alert.alertStyle = .warning
+        alert.accessoryView = container
+        alert.addButton(withTitle: "Enable")
+        alert.addButton(withTitle: "Cancel")
+
+        while true {
+            let response = alert.runModal()
+            guard response == .alertFirstButtonReturn else {
+                return nil
+            }
+
+            let password = passwordField.stringValue
+            let confirmedPassword = confirmField.stringValue
+
+            guard !password.isEmpty else {
+                showInfoAlert(title: "Password Required", message: "Enter a password to enable paranoid mode.")
+                continue
+            }
+
+            guard password == confirmedPassword else {
+                showInfoAlert(title: "Passwords Do Not Match", message: "Enter the same password in both fields.")
+                continue
+            }
+
+            return password
+        }
+    }
+
+    private func promptForParanoidPassword(
+        title: String,
+        message: String,
+        actionTitle: String
+    ) -> String? {
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        passwordField.placeholderString = "Password"
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.accessoryView = passwordField
+        alert.addButton(withTitle: actionTitle)
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else {
+            return nil
+        }
+
+        let password = passwordField.stringValue
+        guard !password.isEmpty else {
+            showInfoAlert(title: "Password Required", message: "Enter the paranoid mode password to continue.")
+            return nil
+        }
+
+        return password
     }
 }
 
