@@ -23,6 +23,9 @@
 		100001000000000000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000202 /* Assets.xcassets */; };
 		100001000000000000000016 /* HelpWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000A /* HelpWindowController.swift */; };
 		100001000000000000000017 /* quickpreview-guide-infographic.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000203 /* quickpreview-guide-infographic.png */; };
+		100001000000000000000018 /* BookmarksWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000B /* BookmarksWindowController.swift */; };
+		100001000000000000000019 /* BookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000C /* BookmarkStore.swift */; };
+		100001000000000000000020 /* VideoThumbnailService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000D /* VideoThumbnailService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +39,9 @@
 		100000100000000000000008 /* PreciseSeekController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreciseSeekController.swift; sourceTree = "<group>"; };
 		100000100000000000000009 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		10000010000000000000000A /* HelpWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpWindowController.swift; sourceTree = "<group>"; };
+		10000010000000000000000B /* BookmarksWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksWindowController.swift; sourceTree = "<group>"; };
+		10000010000000000000000C /* BookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkStore.swift; sourceTree = "<group>"; };
+		10000010000000000000000D /* VideoThumbnailService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoThumbnailService.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
@@ -89,6 +95,7 @@
 				100000100000000000000003 /* GlobalHotkeyManager.swift */,
 				100000100000000000000004 /* KeyCaptureView.swift */,
 				10000010000000000000000A /* HelpWindowController.swift */,
+				10000010000000000000000B /* BookmarksWindowController.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -100,6 +107,8 @@
 				100000100000000000000006 /* PlaybackEngine.swift */,
 				100000100000000000000007 /* LoopController.swift */,
 				100000100000000000000008 /* PreciseSeekController.swift */,
+				10000010000000000000000C /* BookmarkStore.swift */,
+				10000010000000000000000D /* VideoThumbnailService.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -208,10 +217,13 @@
 				100001000000000000000003 /* GlobalHotkeyManager.swift in Sources */,
 				100001000000000000000004 /* KeyCaptureView.swift in Sources */,
 				100001000000000000000016 /* HelpWindowController.swift in Sources */,
+				100001000000000000000018 /* BookmarksWindowController.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,
 				100001000000000000000008 /* PreciseSeekController.swift in Sources */,
+				100001000000000000000019 /* BookmarkStore.swift in Sources */,
+				100001000000000000000020 /* VideoThumbnailService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -4,8 +4,10 @@ import UniformTypeIdentifiers
 
 final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
+    private let bookmarkStore: BookmarkStore
     private let playerView = PlayerSurfaceView(frame: .zero)
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
+    private let addBookmarkButton = NSButton(title: "", target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let maxVolumeGain: Double = 3.0 // 300%
     private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 3.0, target: nil, action: nil)
@@ -30,6 +32,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var pendingRestoredPlayhead: PlaybackSeconds?
     private var pendingRestoredLoopEnabled: Bool?
     private var pendingRestoredIsPlaying: Bool?
+    private var pendingBookmarkNavigationTime: PlaybackSeconds?
     private var clipSelectionStoreCache: [String: ClipSelection] = [:]
     private var clipPlaybackStoreCache: [String: ClipPlaybackState] = [:]
     private var hasLoadedClipSelectionStoreCache = false
@@ -44,6 +47,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private static let clipPlaybackDefaultsKey = "clipPlaybackStateByPath"
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
+    var onShowBookmarksRequested: ((Bookmark?) -> Void)?
+    var onCurrentVideoURLChange: ((URL?) -> Void)?
+
     private struct ClipSelection: Codable {
         let start: PlaybackSeconds
         let end: PlaybackSeconds
@@ -54,6 +60,18 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let volume: Double
         let isLoopEnabled: Bool
         let isPlaying: Bool
+        let windowFrame: ClipWindowFrame?
+    }
+
+    private struct ClipWindowFrame: Codable {
+        let originX: CGFloat
+        let originY: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+
+        var rect: NSRect {
+            NSRect(x: originX, y: originY, width: width, height: height)
+        }
     }
 
     enum FinderSelectionState {
@@ -62,7 +80,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         case video(URL)
     }
 
-    convenience init() {
+    init(bookmarkStore: BookmarkStore) {
+        self.bookmarkStore = bookmarkStore
         let root = KeyCaptureView(frame: NSRect(x: 0, y: 0, width: 920, height: 640))
         let window = NSWindow(
             contentRect: root.frame,
@@ -73,10 +92,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         window.title = Self.baseWindowTitle
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = root
-        self.init(window: window)
+        super.init(window: window)
         window.delegate = self
         configureUI(on: root)
         bindEngine()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
     }
 
     deinit {
@@ -85,8 +109,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    func openVideo(url: URL) {
-        showWindow(nil)
+    func openVideo(url: URL, shouldRevealWindow: Bool = true) {
+        if shouldRevealWindow {
+            showWindow(nil)
+        } else {
+            window?.orderFront(nil)
+        }
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         let normalizedURL = url.standardizedFileURL
         engine.attach(to: normalizedURL, autoplay: true)
@@ -105,6 +133,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         restoreClipPlaybackState(for: normalizedURL, duration: engine.currentDurationSeconds())
         emptyStateLabel.isHidden = true
         updateControlState(hasVideo: true)
+        onCurrentVideoURLChange?(normalizedURL)
     }
 
     func setShortcutHint(_ shortcut: String) {
@@ -408,6 +437,22 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         timeLabel.alignment = .right
 
+        addBookmarkButton.translatesAutoresizingMaskIntoConstraints = false
+        addBookmarkButton.target = self
+        addBookmarkButton.action = #selector(handleAddBookmark(_:))
+        addBookmarkButton.bezelStyle = .texturedRounded
+        addBookmarkButton.image = NSImage(
+            systemSymbolName: "bookmark.fill",
+            accessibilityDescription: "Add Bookmark"
+        )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        addBookmarkButton.imagePosition = .imageOnly
+        addBookmarkButton.toolTip = "Add Bookmark"
+        addBookmarkButton.contentTintColor = .labelColor
+        addBookmarkButton.controlSize = .regular
+        addBookmarkButton.setButtonType(.momentaryPushIn)
+        addBookmarkButton.setContentHuggingPriority(.required, for: .horizontal)
+        addBookmarkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         volumePercentLabel.translatesAutoresizingMaskIntoConstraints = false
         volumePercentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         volumePercentLabel.alignment = .right
@@ -446,7 +491,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         inlineTimelineView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         inlineTimelineView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let controlsRow = NSStackView(views: [inlineTimelineView, volumeControls, timeControls])
+        let controlsRow = NSStackView(views: [inlineTimelineView, addBookmarkButton, volumeControls, timeControls])
         controlsRow.orientation = .horizontal
         controlsRow.alignment = .centerY
         controlsRow.distribution = .fill
@@ -500,6 +545,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
                 self.lastKnownDuration = position.duration
                 self.synchronizeSelectionState(for: position.duration)
                 self.applyPendingPlaybackRestorationIfPossible(duration: position.duration)
+                self.applyPendingBookmarkNavigationIfPossible(duration: position.duration)
             }
             self.updateTimelinePositionIfNeeded(position.seconds)
             self.updateTimeLabelIfNeeded(position.seconds, duration: position.duration)
@@ -595,6 +641,18 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.setAudioGain(Float(sender.doubleValue))
         updateVolumePercentLabel(for: sender.doubleValue)
         persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    @objc
+    private func handleAddBookmark(_ sender: Any?) {
+        _ = sender
+        guard let currentVideoURL else { return }
+        let bookmark = bookmarkStore.addBookmark(
+            videoURL: currentVideoURL,
+            timeSeconds: engine.currentTimeSeconds()
+        )
+        playerView.flashStatusMessage("Bookmark Added")
+        onShowBookmarksRequested?(bookmark)
     }
 
     private func handlePlayerSurfaceClick() {
@@ -703,6 +761,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let restored = storedClipPlaybackState(for: url)
 
         if let restored {
+            restoreWindowFrameIfNeeded(restored.windowFrame)
             let clampedVolume = min(max(restored.volume, 0), maxVolumeGain)
             volumeSlider.doubleValue = clampedVolume
             engine.setAudioGain(Float(clampedVolume))
@@ -759,10 +818,56 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func applyPendingBookmarkNavigationIfPossible(duration: PlaybackSeconds) {
+        guard duration > 0, let pendingBookmarkNavigationTime else { return }
+        self.pendingBookmarkNavigationTime = nil
+        let clampedTime = min(max(pendingBookmarkNavigationTime, 0), duration)
+        engine.handle(command: .seekTo(seconds: clampedTime))
+        inlineTimelineView.currentPosition = clampedTime
+        engine.play()
+        persistCurrentClipPlaybackStateIfNeeded()
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         engine.pause()
         return true
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        _ = notification
+        persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        _ = notification
+        persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    func openBookmark(_ bookmark: Bookmark) {
+        let targetURL = bookmark.videoURL.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: targetURL.path) else {
+            playerView.flashStatusMessage("Bookmark File Missing")
+            return
+        }
+        window?.orderFront(nil)
+
+        if currentVideoURL?.path != targetURL.path {
+            pendingBookmarkNavigationTime = bookmark.timeSeconds
+            openVideo(url: targetURL, shouldRevealWindow: false)
+            applyPendingBookmarkNavigationIfPossible(duration: engine.currentDurationSeconds())
+            return
+        }
+
+        let duration = engine.currentDurationSeconds()
+        let clampedTime = duration > 0
+            ? min(max(bookmark.timeSeconds, 0), duration)
+            : max(bookmark.timeSeconds, 0)
+        engine.handle(command: .seekTo(seconds: clampedTime))
+        inlineTimelineView.currentPosition = clampedTime
+        engine.play()
+        persistCurrentClipPlaybackStateIfNeeded()
+        playerView.flashStatusMessage("Jumped to Bookmark")
     }
 
     private func updateTimelinePositionIfNeeded(_ positionSeconds: PlaybackSeconds) {
@@ -885,7 +990,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             playhead: max(engine.currentTimeSeconds(), 0),
             volume: min(max(volumeSlider.doubleValue, 0), maxVolumeGain),
             isLoopEnabled: isLoopEnabled,
-            isPlaying: engine.currentPlayer().rate != 0
+            isPlaying: engine.currentPlayer().rate != 0,
+            windowFrame: currentPersistableWindowFrame()
         )
         storeClipPlaybackState(state, for: currentVideoURL)
         if flushImmediately {
@@ -895,6 +1001,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateControlState(hasVideo: Bool) {
         inlineTimelineView.isControlEnabled = hasVideo
+        addBookmarkButton.isEnabled = hasVideo
     }
 
     private func applyLoopPreferenceForCurrentClip() {
@@ -915,6 +1022,40 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func currentPersistableWindowFrame() -> ClipWindowFrame? {
+        guard let window else { return nil }
+        let frame = window.frame
+        guard frame.width.isFinite, frame.height.isFinite, frame.width > 0, frame.height > 0 else {
+            return nil
+        }
+        return ClipWindowFrame(
+            originX: frame.origin.x,
+            originY: frame.origin.y,
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    private func restoreWindowFrameIfNeeded(_ storedFrame: ClipWindowFrame?) {
+        guard let window, let storedFrame else { return }
+        let minimumSize = window.minSize
+        var frame = storedFrame.rect
+        frame.size.width = max(frame.width, minimumSize.width)
+        frame.size.height = max(frame.height, minimumSize.height)
+
+        if let screen = window.screen ?? NSScreen.main {
+            let visibleFrame = screen.visibleFrame
+            let maxWidth = max(visibleFrame.width, minimumSize.width)
+            let maxHeight = max(visibleFrame.height, minimumSize.height)
+            frame.size.width = min(frame.width, maxWidth)
+            frame.size.height = min(frame.height, maxHeight)
+            frame.origin.x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - frame.width)
+            frame.origin.y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - frame.height)
+        }
+
+        window.setFrame(frame, display: true)
     }
 
     private func loadClipSelectionStoreCacheIfNeeded() {
