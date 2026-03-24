@@ -3,14 +3,19 @@ import UniformTypeIdentifiers
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let hotkeyManager = GlobalHotkeyManager()
+    private let bookmarkStore = BookmarkStore()
+    private let thumbnailService = VideoThumbnailService()
     private var windowController: MainPlayerWindowController?
     private var helpWindowController: HelpWindowController?
+    private var bookmarksWindowController: BookmarksWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
     private let finderSelectionMonitorQueue = DispatchQueue(
         label: "quickpreview.finder-selection-monitor",
         qos: .utility
     )
     private var isSelectionCheckInProgress = false
+    private var lastObservedFinderSelectedVideoURL: URL?
+    private var ignoredFinderSelectedVideoURL: URL?
     private let loopMenuItemTag = 4101
     private let rotationMenuItemBaseTag = 4200
     private let allowedRotationDegrees = [0, 90, 180, 270]
@@ -64,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationWillTerminate(_ notification: Notification) {
         windowController?.flushPersistedStateWrites()
+        bookmarkStore.flushPendingWrites()
         finderSelectionMonitorTimer?.cancel()
         finderSelectionMonitorTimer = nil
     }
@@ -115,6 +121,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ensureWindowController().setRotationDegrees(rotationDegrees)
     }
 
+    @objc
+    private func handleShowBookmarks(_ sender: Any?) {
+        showBookmarksWindow(selecting: nil)
+        _ = sender
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let controller = ensureWindowController()
         switch menuItem.tag {
@@ -149,7 +161,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let windowController {
             return windowController
         }
-        let controller = MainPlayerWindowController()
+        let controller = MainPlayerWindowController(bookmarkStore: bookmarkStore)
+        controller.onShowBookmarksRequested = { [weak self] bookmark in
+            self?.showBookmarksWindow(selecting: bookmark)
+        }
+        controller.onCurrentVideoURLChange = { [weak self] videoURL in
+            self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
+        }
         windowController = controller
         return controller
     }
@@ -163,6 +181,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return controller
     }
 
+    private func ensureBookmarksWindowController() -> BookmarksWindowController {
+        if let bookmarksWindowController {
+            return bookmarksWindowController
+        }
+        let controller = BookmarksWindowController(
+            bookmarkStore: bookmarkStore,
+            thumbnailService: thumbnailService
+        )
+        controller.onOpenBookmark = { [weak self] bookmark in
+            self?.ignoreCurrentFinderSelection()
+            self?.ensureWindowController().openBookmark(bookmark)
+        }
+        controller.setCurrentVideoURL(windowController?.loadedVideoURL())
+        bookmarksWindowController = controller
+        return controller
+    }
+
     @objc
     private func handleShowGuide(_ sender: Any?) {
         let controller = ensureHelpWindowController()
@@ -170,6 +205,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         _ = sender
+    }
+
+    private func showBookmarksWindow(selecting bookmark: Bookmark?) {
+        let controller = ensureBookmarksWindowController()
+        controller.setCurrentVideoURL(ensureWindowController().loadedVideoURL())
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if let bookmark {
+            controller.revealBookmark(bookmark)
+        }
     }
 
     private func buildMainMenu() {
@@ -237,6 +283,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         rotationMenuItem.submenu = rotationMenu
         playbackMenu.addItem(rotationMenuItem)
+
+        let bookmarksItem = NSMenuItem(
+            title: "Bookmarks",
+            action: #selector(handleShowBookmarks(_:)),
+            keyEquivalent: "b"
+        )
+        bookmarksItem.target = self
+        bookmarksItem.keyEquivalentModifierMask = [.command]
+        playbackMenu.addItem(bookmarksItem)
         playbackMenuItem.submenu = playbackMenu
 
         let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
@@ -289,7 +344,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
-        guard let selectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL() else {
+        let selectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL()
+        let selectionChanged = selectedVideoURL != lastObservedFinderSelectedVideoURL
+        lastObservedFinderSelectedVideoURL = selectedVideoURL
+
+        guard let selectedVideoURL else {
+            ignoredFinderSelectedVideoURL = nil
+            return
+        }
+
+        if ignoredFinderSelectedVideoURL == selectedVideoURL {
+            return
+        }
+        ignoredFinderSelectedVideoURL = nil
+
+        guard selectionChanged else {
             return
         }
         guard selectedVideoURL != loadedVideoURL else {
@@ -307,6 +376,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             controller.openVideo(url: selectedVideoURL)
         }
+    }
+
+    private func ignoreCurrentFinderSelection() {
+        ignoredFinderSelectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL()
+        lastObservedFinderSelectedVideoURL = ignoredFinderSelectedVideoURL
     }
 
     private func showStartupAlert(title: String, message: String) {
