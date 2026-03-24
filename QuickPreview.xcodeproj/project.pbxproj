@@ -26,6 +26,7 @@
 		100001000000000000000018 /* BookmarksWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000B /* BookmarksWindowController.swift */; };
 		100001000000000000000019 /* BookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000C /* BookmarkStore.swift */; };
 		100001000000000000000020 /* VideoThumbnailService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000D /* VideoThumbnailService.swift */; };
+		100001000000000000000021 /* ProtectedBookmarksSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000E /* ProtectedBookmarksSessionController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		10000010000000000000000B /* BookmarksWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksWindowController.swift; sourceTree = "<group>"; };
 		10000010000000000000000C /* BookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkStore.swift; sourceTree = "<group>"; };
 		10000010000000000000000D /* VideoThumbnailService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoThumbnailService.swift; sourceTree = "<group>"; };
+		10000010000000000000000E /* ProtectedBookmarksSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtectedBookmarksSessionController.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
@@ -96,6 +98,7 @@
 				100000100000000000000004 /* KeyCaptureView.swift */,
 				10000010000000000000000A /* HelpWindowController.swift */,
 				10000010000000000000000B /* BookmarksWindowController.swift */,
+				10000010000000000000000E /* ProtectedBookmarksSessionController.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -218,6 +221,7 @@
 				100001000000000000000004 /* KeyCaptureView.swift in Sources */,
 				100001000000000000000016 /* HelpWindowController.swift in Sources */,
 				100001000000000000000018 /* BookmarksWindowController.swift in Sources */,
+				100001000000000000000021 /* ProtectedBookmarksSessionController.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,

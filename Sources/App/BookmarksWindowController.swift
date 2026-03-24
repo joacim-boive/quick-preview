@@ -8,6 +8,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         static let filename = NSUserInterfaceItemIdentifier("filename")
         static let importedDate = NSUserInterfaceItemIdentifier("importedDate")
         static let fileCreatedDate = NSUserInterfaceItemIdentifier("fileCreatedDate")
+        static let protected = NSUserInterfaceItemIdentifier("protected")
         static let tags = NSUserInterfaceItemIdentifier("tags")
         static let remove = NSUserInterfaceItemIdentifier("remove")
     }
@@ -19,6 +20,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     private let bookmarkStore: BookmarkStore
     private let thumbnailService: VideoThumbnailService
+    private let protectedBookmarksSessionController: ProtectedBookmarksSessionController
     private let searchField = NSSearchField(frame: .zero)
     private let scopeControl = NSSegmentedControl(labels: ["Current Video", "All Videos", "Imported"], trackingMode: .selectOne, target: nil, action: nil)
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
@@ -26,6 +28,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private let tableView = BookmarkTableView(frame: .zero)
     private let emptyStateLabel = NSTextField(labelWithString: "No bookmarks yet.")
     private var bookmarkChangeObserver: NSObjectProtocol?
+    private var protectedSessionObserver: NSObjectProtocol?
     private var bookmarks: [Bookmark] = []
     private var currentVideoURL: URL?
     private var currentScope: BookmarkListScope = .currentVideo
@@ -47,10 +50,16 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }()
 
     var onOpenBookmark: ((Bookmark) -> Void)?
+    var onWindowClosed: (() -> Void)?
 
-    init(bookmarkStore: BookmarkStore, thumbnailService: VideoThumbnailService) {
+    init(
+        bookmarkStore: BookmarkStore,
+        thumbnailService: VideoThumbnailService,
+        protectedBookmarksSessionController: ProtectedBookmarksSessionController
+    ) {
         self.bookmarkStore = bookmarkStore
         self.thumbnailService = thumbnailService
+        self.protectedBookmarksSessionController = protectedBookmarksSessionController
         let rootView = BookmarkDropView(frame: NSRect(x: 0, y: 0, width: 1080, height: 560))
         let window = NSWindow(
             contentRect: rootView.frame,
@@ -77,6 +86,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         if let bookmarkChangeObserver {
             NotificationCenter.default.removeObserver(bookmarkChangeObserver)
         }
+        if let protectedSessionObserver {
+            NotificationCenter.default.removeObserver(protectedSessionObserver)
+        }
     }
 
     func setCurrentVideoURL(_ videoURL: URL?) {
@@ -98,6 +110,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         _ = notification
         window?.makeFirstResponder(nil)
+        onWindowClosed?()
     }
 
     private func configureUI(on rootView: BookmarkDropView) {
@@ -116,8 +129,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         scopeControl.translatesAutoresizingMaskIntoConstraints = false
         scopeControl.target = self
         scopeControl.action = #selector(handleScopeChanged(_:))
-        scopeControl.selectedSegment = BookmarkListScope.currentVideo.rawValue
         scopeControl.segmentStyle = .rounded
+        refreshScopeControl()
 
         importButton.translatesAutoresizingMaskIntoConstraints = false
         importButton.target = self
@@ -199,6 +212,13 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tagsColumn.width = 240
         tagsColumn.resizingMask = []
 
+        let protectedColumn = NSTableColumn(identifier: ColumnIdentifier.protected)
+        protectedColumn.title = "Private"
+        protectedColumn.minWidth = 72
+        protectedColumn.width = 78
+        protectedColumn.maxWidth = 84
+        protectedColumn.resizingMask = []
+
         let removeColumn = NSTableColumn(identifier: ColumnIdentifier.remove)
         removeColumn.title = ""
         removeColumn.minWidth = 48
@@ -213,6 +233,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tableView.addTableColumn(filenameColumn)
         tableView.addTableColumn(importedDateColumn)
         tableView.addTableColumn(fileCreatedDateColumn)
+        tableView.addTableColumn(protectedColumn)
         tableView.addTableColumn(tagsColumn)
         tableView.addTableColumn(removeColumn)
         scrollView.documentView = tableView
@@ -257,9 +278,18 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         ) { [weak self] _ in
             self?.reloadBookmarks()
         }
+
+        protectedSessionObserver = NotificationCenter.default.addObserver(
+            forName: .protectedBookmarksSessionDidChange,
+            object: protectedBookmarksSessionController,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleProtectedSessionStateChange()
+        }
     }
 
     private func reloadBookmarks(selecting bookmarkID: BookmarkID? = nil) {
+        refreshScopeControl()
         let selectedBookmarkID: BookmarkID? = {
             guard tableView.selectedRow >= 0, tableView.selectedRow < bookmarks.count else {
                 return bookmarkID
@@ -271,7 +301,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             scope: currentScope,
             currentVideoURL: currentVideoURL,
             searchQuery: searchField.stringValue,
-            sort: currentSort
+            sort: currentSort,
+            visibility: bookmarkVisibility
         )
         suppressBookmarkOpenOnSelectionChange = true
         tableView.reloadData()
@@ -305,6 +336,10 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             message = searchField.stringValue.isEmpty
                 ? "No imported media yet."
                 : "No imported media matches your current search."
+        case .protected:
+            message = searchField.stringValue.isEmpty
+                ? "No protected bookmarks yet."
+                : "No protected bookmarks match your current search."
         }
         emptyStateLabel.stringValue = message
         let isEmpty = bookmarks.isEmpty
@@ -335,7 +370,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     @objc
     private func handleScopeChanged(_ sender: NSSegmentedControl) {
-        currentScope = BookmarkListScope(rawValue: sender.selectedSegment) ?? .currentVideo
+        currentScope = BookmarkListScope(rawValue: sender.selectedSegment) ?? fallbackScopeForLockedSession()
         reloadBookmarks()
     }
 
@@ -358,8 +393,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         _ = sender
         let clickedColumn = tableView.clickedColumn
         let tagsColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.tags)
+        let protectedColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.protected)
         let removeColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.remove)
-        if clickedColumn == tagsColumnIndex || clickedColumn == removeColumnIndex {
+        if clickedColumn == tagsColumnIndex || clickedColumn == protectedColumnIndex || clickedColumn == removeColumnIndex {
             return
         }
         openSelectedBookmark()
@@ -420,6 +456,40 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             return .automatic
         }
     }
+
+    private var bookmarkVisibility: BookmarkVisibility {
+        if currentScope == .protected {
+            return .protectedOnly
+        }
+        return protectedBookmarksSessionController.isUnlocked ? .all : .publicOnly
+    }
+
+    private func handleProtectedSessionStateChange() {
+        if !protectedBookmarksSessionController.isUnlocked, currentScope == .protected {
+            currentScope = fallbackScopeForLockedSession()
+        }
+        reloadBookmarks()
+    }
+
+    private func refreshScopeControl() {
+        let labels = protectedBookmarksSessionController.isUnlocked
+            ? ["Current Video", "All Videos", "Imported", "Protected"]
+            : ["Current Video", "All Videos", "Imported"]
+        scopeControl.segmentCount = labels.count
+        for (index, label) in labels.enumerated() {
+            scopeControl.setLabel(label, forSegment: index)
+        }
+
+        if !protectedBookmarksSessionController.isUnlocked, currentScope == .protected {
+            currentScope = fallbackScopeForLockedSession()
+        }
+
+        scopeControl.selectedSegment = min(currentScope.rawValue, labels.count - 1)
+    }
+
+    private func fallbackScopeForLockedSession() -> BookmarkListScope {
+        currentVideoURL == nil ? .allVideos : .currentVideo
+    }
 }
 
 extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate {
@@ -461,6 +531,13 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
             let cell = reusableDateCell(in: tableView, identifier: "BookmarkFileCreatedDateCellView")
             cell.configure(value: Self.formattedFileCreatedDate(bookmark.fileCreatedAt))
             return cell
+        case ColumnIdentifier.protected:
+            let cell = reusableProtectedCell(in: tableView)
+            cell.configure(bookmark: bookmark) { [weak self] bookmarkID, isProtected in
+                self?.suppressBookmarkOpenOnSelectionChange = true
+                self?.bookmarkStore.updateProtection(for: bookmarkID, isProtected: isProtected)
+            }
+            return cell
         case ColumnIdentifier.tags:
             let cell = reusableTagsCell(in: tableView)
             cell.configure(bookmark: bookmark, delegate: self) { [weak self] in
@@ -481,9 +558,10 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
     func tableViewSelectionDidChange(_ notification: Notification) {
         _ = notification
         let tagsColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.tags)
+        let protectedColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.protected)
         let removeColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.remove)
         let interactionColumn = tableView.mouseDownColumn
-        if interactionColumn == tagsColumnIndex || interactionColumn == removeColumnIndex {
+        if interactionColumn == tagsColumnIndex || interactionColumn == protectedColumnIndex || interactionColumn == removeColumnIndex {
             suppressBookmarkOpenOnSelectionChange = false
             return
         }
@@ -533,6 +611,16 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
         }
         let cell = BookmarkDateCellView(frame: .zero)
         cell.identifier = reusableIdentifier
+        return cell
+    }
+
+    private func reusableProtectedCell(in tableView: NSTableView) -> BookmarkProtectedCellView {
+        let identifier = NSUserInterfaceItemIdentifier("BookmarkProtectedCellView")
+        if let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? BookmarkProtectedCellView {
+            return cell
+        }
+        let cell = BookmarkProtectedCellView(frame: .zero)
+        cell.identifier = identifier
         return cell
     }
 
@@ -909,6 +997,45 @@ private final class BookmarkTagsCellView: NSTableCellView {
         tagsTextField.delegate = delegate
         tagsTextField.onInteraction = onInteraction
         tagsTextField.stringValue = BookmarkStore.tagString(from: bookmark.tags)
+    }
+}
+
+private final class BookmarkProtectedCellView: NSTableCellView {
+    private let checkbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private var bookmarkID: BookmarkID?
+    private var onToggle: ((BookmarkID, Bool) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        checkbox.translatesAutoresizingMaskIntoConstraints = false
+        checkbox.target = self
+        checkbox.action = #selector(handleToggle(_:))
+        checkbox.toolTip = "Hide this bookmark until protected media is unlocked"
+
+        addSubview(checkbox)
+        NSLayoutConstraint.activate([
+            checkbox.centerXAnchor.constraint(equalTo: centerXAnchor),
+            checkbox.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(bookmark: Bookmark, onToggle: @escaping (BookmarkID, Bool) -> Void) {
+        bookmarkID = bookmark.id
+        checkbox.state = bookmark.isProtected ? .on : .off
+        self.onToggle = onToggle
+    }
+
+    @objc
+    private func handleToggle(_ sender: NSButton) {
+        guard let bookmarkID else { return }
+        onToggle?(bookmarkID, sender.state == .on)
     }
 }
 

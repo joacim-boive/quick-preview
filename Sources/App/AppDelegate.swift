@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let hotkeyManager = GlobalHotkeyManager()
     private let bookmarkStore = BookmarkStore()
     private let thumbnailService = VideoThumbnailService()
+    private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
     private var windowController: MainPlayerWindowController?
     private var helpWindowController: HelpWindowController?
     private var bookmarksWindowController: BookmarksWindowController?
@@ -18,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var ignoredFinderSelectedVideoURL: URL?
     private let loopMenuItemTag = 4101
     private let rotationMenuItemBaseTag = 4200
+    private let protectedMediaMenuItemTag = 4300
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -127,12 +129,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         _ = sender
     }
 
+    @objc
+    private func handleProtectedMediaSession(_ sender: Any?) {
+        _ = sender
+        if protectedBookmarksSessionController.isUnlocked {
+            protectedBookmarksSessionController.lock()
+            return
+        }
+
+        let controller = ensureBookmarksWindowController()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        protectedBookmarksSessionController.authenticate(
+            reason: "Unlock protected bookmarks in QuickPreview."
+        ) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.showBookmarksWindow(selecting: nil)
+            case .cancelled:
+                break
+            case .unavailable:
+                self.showInfoAlert(
+                    title: "Authentication Unavailable",
+                    message: "QuickPreview could not use macOS authentication to unlock protected bookmarks."
+                )
+            case .failed:
+                self.showInfoAlert(
+                    title: "Authentication Failed",
+                    message: "QuickPreview could not unlock protected bookmarks."
+                )
+            }
+        }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let controller = ensureWindowController()
         switch menuItem.tag {
         case loopMenuItemTag:
             menuItem.state = controller.loopEnabled() ? .on : .off
             return controller.hasLoadedVideo()
+        case protectedMediaMenuItemTag:
+            let isUnlocked = protectedBookmarksSessionController.isUnlocked
+            menuItem.title = isUnlocked ? "Lock Protected Media" : "Unlock Protected Media..."
+            return true
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
@@ -187,11 +229,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let controller = BookmarksWindowController(
             bookmarkStore: bookmarkStore,
-            thumbnailService: thumbnailService
+            thumbnailService: thumbnailService,
+            protectedBookmarksSessionController: protectedBookmarksSessionController
         )
         controller.onOpenBookmark = { [weak self] bookmark in
             self?.ignoreCurrentFinderSelection()
             self?.ensureWindowController().openBookmark(bookmark)
+        }
+        controller.onWindowClosed = { [weak self] in
+            self?.protectedBookmarksSessionController.lock()
         }
         controller.setCurrentVideoURL(windowController?.loadedVideoURL())
         bookmarksWindowController = controller
@@ -292,6 +338,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         bookmarksItem.target = self
         bookmarksItem.keyEquivalentModifierMask = [.command]
         playbackMenu.addItem(bookmarksItem)
+
+        let protectedMediaItem = NSMenuItem(
+            title: "Unlock Protected Media...",
+            action: #selector(handleProtectedMediaSession(_:)),
+            keyEquivalent: ""
+        )
+        protectedMediaItem.target = self
+        protectedMediaItem.tag = protectedMediaMenuItemTag
+        playbackMenu.addItem(protectedMediaItem)
         playbackMenuItem.submenu = playbackMenu
 
         let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
@@ -392,6 +447,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
+    }
+
+    private func showInfoAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 
