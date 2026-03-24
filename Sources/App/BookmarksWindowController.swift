@@ -463,7 +463,9 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
             return cell
         case ColumnIdentifier.tags:
             let cell = reusableTagsCell(in: tableView)
-            cell.configure(bookmark: bookmark, delegate: self)
+            cell.configure(bookmark: bookmark, delegate: self) { [weak self] in
+                self?.suppressBookmarkOpenOnSelectionChange = true
+            }
             return cell
         case ColumnIdentifier.remove:
             let cell = reusableRemoveCell(in: tableView)
@@ -478,7 +480,15 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         _ = notification
+        let tagsColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.tags)
+        let removeColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.remove)
+        let interactionColumn = tableView.mouseDownColumn
+        if interactionColumn == tagsColumnIndex || interactionColumn == removeColumnIndex {
+            suppressBookmarkOpenOnSelectionChange = false
+            return
+        }
         guard !suppressBookmarkOpenOnSelectionChange else {
+            suppressBookmarkOpenOnSelectionChange = false
             return
         }
         guard window?.firstResponder !== tableView.currentEditor() else {
@@ -576,6 +586,14 @@ extension BookmarksWindowController: NSSearchFieldDelegate, NSTextFieldDelegate 
 private final class BookmarkTableView: NSTableView {
     var onReturnKey: (() -> Void)?
     var onDeleteKey: (() -> Void)?
+    private(set) var mouseDownColumn: Int = -1
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        mouseDownColumn = column(at: point)
+        super.mouseDown(with: event)
+        mouseDownColumn = -1
+    }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -882,9 +900,14 @@ private final class BookmarkTagsCellView: NSTableCellView {
         nil
     }
 
-    func configure(bookmark: Bookmark, delegate: NSTextFieldDelegate) {
+    func configure(
+        bookmark: Bookmark,
+        delegate: NSTextFieldDelegate,
+        onInteraction: @escaping () -> Void
+    ) {
         tagsTextField.bookmarkID = bookmark.id
         tagsTextField.delegate = delegate
+        tagsTextField.onInteraction = onInteraction
         tagsTextField.stringValue = BookmarkStore.tagString(from: bookmark.tags)
     }
 }
@@ -937,6 +960,30 @@ private final class BookmarkRemoveCellView: NSTableCellView {
 
 private final class BookmarkTagsTextField: NSTextField {
     var bookmarkID: BookmarkID?
+    var onInteraction: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onInteraction?()
+        if let tableView = enclosingTableView {
+            let row = tableView.row(for: self)
+            if row >= 0, tableView.selectedRow != row {
+                tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+        }
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    private var enclosingTableView: NSTableView? {
+        var view = superview
+        while let currentView = view {
+            if let tableView = currentView as? NSTableView {
+                return tableView
+            }
+            view = currentView.superview
+        }
+        return nil
+    }
 }
 
 private final class BookmarkDropView: NSView {
