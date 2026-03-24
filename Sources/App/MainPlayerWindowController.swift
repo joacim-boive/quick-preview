@@ -430,12 +430,13 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         addBookmarkButton.action = #selector(handleAddBookmark(_:))
         addBookmarkButton.bezelStyle = .texturedRounded
         addBookmarkButton.image = NSImage(
-            systemSymbolName: "bookmark.badge.plus",
+            systemSymbolName: "bookmark.fill",
             accessibilityDescription: "Add Bookmark"
-        )
+        )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
         addBookmarkButton.imagePosition = .imageOnly
         addBookmarkButton.toolTip = "Add Bookmark"
         addBookmarkButton.contentTintColor = .labelColor
+        addBookmarkButton.controlSize = .regular
         addBookmarkButton.setButtonType(.momentaryPushIn)
         addBookmarkButton.setContentHuggingPriority(.required, for: .horizontal)
         addBookmarkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
