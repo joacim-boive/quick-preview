@@ -163,13 +163,15 @@ final class BookmarkStore {
         tags: [String] = []
     ) -> Bookmark {
         loadCacheIfNeeded()
+        let normalizedURL = videoURL.standardizedFileURL
         let bookmark = Bookmark(
             id: BookmarkID(),
-            videoPath: videoURL.standardizedFileURL.path,
+            videoPath: normalizedURL.path,
             timeSeconds: max(timeSeconds, 0),
             createdAt: Date(),
             updatedAt: Date(),
-            tags: Self.sanitizedTags(tags)
+            tags: Self.sanitizedTags(tags),
+            fileCreatedAt: Self.fileCreationDate(for: normalizedURL)
         )
         cache.append(bookmark)
         schedulePersist()
