@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let hotkeyManager = GlobalHotkeyManager()
     private var windowController: MainPlayerWindowController?
+    private var helpWindowController: HelpWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
     private let finderSelectionMonitorQueue = DispatchQueue(
         label: "quickpreview.finder-selection-monitor",
@@ -153,6 +154,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return controller
     }
 
+    private func ensureHelpWindowController() -> HelpWindowController {
+        if let helpWindowController {
+            return helpWindowController
+        }
+        let controller = HelpWindowController()
+        helpWindowController = controller
+        return controller
+    }
+
+    @objc
+    private func handleShowGuide(_ sender: Any?) {
+        let controller = ensureHelpWindowController()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        _ = sender
+    }
+
     private func buildMainMenu() {
         let mainMenu = NSMenu()
 
@@ -219,6 +238,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         rotationMenuItem.submenu = rotationMenu
         playbackMenu.addItem(rotationMenuItem)
         playbackMenuItem.submenu = playbackMenu
+
+        let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        mainMenu.addItem(helpMenuItem)
+
+        let helpMenu = NSMenu(title: "Help")
+        let guideItem = NSMenuItem(
+            title: "QuickPreview Guide",
+            action: #selector(handleShowGuide(_:)),
+            keyEquivalent: "/"
+        )
+        guideItem.target = self
+        guideItem.keyEquivalentModifierMask = [.command, .shift]
+        helpMenu.addItem(guideItem)
+        helpMenuItem.submenu = helpMenu
 
         NSApp.mainMenu = mainMenu
     }

@@ -15,12 +15,14 @@
 		100001000000000000000006 /* PlaybackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000006 /* PlaybackEngine.swift */; };
 		100001000000000000000007 /* LoopController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000007 /* LoopController.swift */; };
 		100001000000000000000008 /* PreciseSeekController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000008 /* PreciseSeekController.swift */; };
-		100001000000000000000014 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000009 /* main.swift */; };
 		100001000000000000000009 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000001 /* AppKit.framework */; };
 		100001000000000000000010 /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000002 /* AVKit.framework */; };
 		100001000000000000000011 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000003 /* AVFoundation.framework */; };
 		100001000000000000000012 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000004 /* Carbon.framework */; };
+		100001000000000000000014 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000009 /* main.swift */; };
 		100001000000000000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000202 /* Assets.xcassets */; };
+		100001000000000000000016 /* HelpWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000A /* HelpWindowController.swift */; };
+		100001000000000000000017 /* quickpreview-guide-infographic.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000203 /* quickpreview-guide-infographic.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,14 +35,14 @@
 		100000100000000000000007 /* LoopController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopController.swift; sourceTree = "<group>"; };
 		100000100000000000000008 /* PreciseSeekController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreciseSeekController.swift; sourceTree = "<group>"; };
 		100000100000000000000009 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		10000010000000000000000A /* HelpWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpWindowController.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-
+		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
 		100000300000000000000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000002 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		100000300000000000000004 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
-
 		100000600000000000000001 /* QuickPreview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickPreview.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -86,6 +88,7 @@
 				100000100000000000000002 /* MainPlayerWindowController.swift */,
 				100000100000000000000003 /* GlobalHotkeyManager.swift */,
 				100000100000000000000004 /* KeyCaptureView.swift */,
+				10000010000000000000000A /* HelpWindowController.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -106,6 +109,7 @@
 			children = (
 				100000100000000000000201 /* App-Info.plist */,
 				100000100000000000000202 /* Assets.xcassets */,
+				100000100000000000000203 /* quickpreview-guide-infographic.png */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -187,6 +191,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				100001000000000000000015 /* Assets.xcassets in Resources */,
+				100001000000000000000017 /* quickpreview-guide-infographic.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -202,6 +207,7 @@
 				100001000000000000000002 /* MainPlayerWindowController.swift in Sources */,
 				100001000000000000000003 /* GlobalHotkeyManager.swift in Sources */,
 				100001000000000000000004 /* KeyCaptureView.swift in Sources */,
+				100001000000000000000016 /* HelpWindowController.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,
@@ -219,12 +225,13 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = U34874Z88E;
+				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.quickpreview.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				INFOPLIST_FILE = Sources/Resources/App-Info.plist;
 			};
 			name = Debug;
 		};
@@ -235,12 +242,13 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = U34874Z88E;
+				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.quickpreview.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				INFOPLIST_FILE = Sources/Resources/App-Info.plist;
 			};
 			name = Release;
 		};
