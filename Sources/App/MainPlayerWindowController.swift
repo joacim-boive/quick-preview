@@ -529,11 +529,17 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         case 53:
             closePreviewWindow()
         case 49:
+            guard engine.currentPlayer().currentItem != nil else { return }
+            let wasPlaying = engine.currentPlayer().rate != 0
             engine.handle(command: .togglePlayPause)
+            let symbolName = wasPlaying ? "pause.fill" : "play.fill"
+            playerView.flashPlaybackIndicator(symbolName: symbolName)
         case 37:
             toggleSelectedLoop()
+            playerView.flashStatusMessage(isLoopEnabled ? "Loop On" : "Loop Off")
         case 15:
             rotateClockwise()
+            playerView.flashStatusMessage("Rotation \(currentRotationDegrees)°")
         case 123:
             let amount = isShift ? engine.coarseStepAmount() : engine.fineStepAmount()
             engine.handle(command: .seekBy(seconds: -amount))
@@ -1469,6 +1475,9 @@ private final class PlayerSurfaceView: NSView {
     private let playbackIndicatorContainer = NSVisualEffectView()
     private let playbackIndicatorImageView = NSImageView()
     private var hideIndicatorWorkItem: DispatchWorkItem?
+    private let statusMessageContainer = NSVisualEffectView()
+    private let statusMessageLabel = NSTextField(labelWithString: "")
+    private var hideStatusMessageWorkItem: DispatchWorkItem?
     private var rotationDegrees = 0
 
     var clickHandler: (() -> Void)?
@@ -1503,6 +1512,23 @@ private final class PlayerSurfaceView: NSView {
         playbackIndicatorContainer.addSubview(playbackIndicatorImageView)
         addSubview(playbackIndicatorContainer)
 
+        statusMessageContainer.translatesAutoresizingMaskIntoConstraints = false
+        statusMessageContainer.material = .hudWindow
+        statusMessageContainer.blendingMode = .withinWindow
+        statusMessageContainer.state = .active
+        statusMessageContainer.wantsLayer = true
+        statusMessageContainer.layer?.cornerRadius = 10
+        statusMessageContainer.layer?.masksToBounds = true
+        statusMessageContainer.alphaValue = 0
+        statusMessageContainer.isHidden = true
+
+        statusMessageLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusMessageLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        statusMessageLabel.textColor = .white
+        statusMessageLabel.alignment = .center
+        statusMessageContainer.addSubview(statusMessageLabel)
+        addSubview(statusMessageContainer)
+
         NSLayoutConstraint.activate([
             playbackIndicatorContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
             playbackIndicatorContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1512,7 +1538,15 @@ private final class PlayerSurfaceView: NSView {
             playbackIndicatorImageView.centerXAnchor.constraint(equalTo: playbackIndicatorContainer.centerXAnchor),
             playbackIndicatorImageView.centerYAnchor.constraint(equalTo: playbackIndicatorContainer.centerYAnchor),
             playbackIndicatorImageView.widthAnchor.constraint(equalToConstant: 34),
-            playbackIndicatorImageView.heightAnchor.constraint(equalToConstant: 34)
+            playbackIndicatorImageView.heightAnchor.constraint(equalToConstant: 34),
+
+            statusMessageContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
+            statusMessageContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -36),
+
+            statusMessageLabel.topAnchor.constraint(equalTo: statusMessageContainer.topAnchor, constant: 8),
+            statusMessageLabel.bottomAnchor.constraint(equalTo: statusMessageContainer.bottomAnchor, constant: -8),
+            statusMessageLabel.leadingAnchor.constraint(equalTo: statusMessageContainer.leadingAnchor, constant: 14),
+            statusMessageLabel.trailingAnchor.constraint(equalTo: statusMessageContainer.trailingAnchor, constant: -14)
         ])
     }
 
@@ -1572,6 +1606,32 @@ private final class PlayerSurfaceView: NSView {
         }
         hideIndicatorWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
+    }
+
+    func flashStatusMessage(_ message: String) {
+        guard !message.isEmpty else { return }
+
+        hideStatusMessageWorkItem?.cancel()
+        statusMessageLabel.stringValue = message
+        statusMessageContainer.isHidden = false
+        statusMessageContainer.alphaValue = 0
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            statusMessageContainer.animator().alphaValue = 1
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                self.statusMessageContainer.animator().alphaValue = 0
+            } completionHandler: {
+                self.statusMessageContainer.isHidden = true
+            }
+        }
+        hideStatusMessageWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: workItem)
     }
 
     func setRotationDegrees(_ degrees: Int) {
