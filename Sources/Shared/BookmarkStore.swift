@@ -5,6 +5,13 @@ typealias BookmarkID = UUID
 enum BookmarkListScope: Int, CaseIterable {
     case currentVideo
     case allVideos
+    case imported
+}
+
+enum BookmarkSort: Equatable {
+    case automatic
+    case importedAt(ascending: Bool)
+    case fileCreatedAt(ascending: Bool)
 }
 
 struct Bookmark: Codable, Equatable {
@@ -14,6 +21,56 @@ struct Bookmark: Codable, Equatable {
     let createdAt: Date
     let updatedAt: Date
     let tags: [String]
+    let isImported: Bool
+    let importedAt: Date?
+    let fileCreatedAt: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case videoPath
+        case timeSeconds
+        case createdAt
+        case updatedAt
+        case tags
+        case isImported
+        case importedAt
+        case fileCreatedAt
+    }
+
+    init(
+        id: BookmarkID,
+        videoPath: String,
+        timeSeconds: PlaybackSeconds,
+        createdAt: Date,
+        updatedAt: Date,
+        tags: [String],
+        isImported: Bool = false,
+        importedAt: Date? = nil,
+        fileCreatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.videoPath = videoPath
+        self.timeSeconds = timeSeconds
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.tags = tags
+        self.isImported = isImported
+        self.importedAt = importedAt
+        self.fileCreatedAt = fileCreatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(BookmarkID.self, forKey: .id)
+        videoPath = try container.decode(String.self, forKey: .videoPath)
+        timeSeconds = try container.decode(PlaybackSeconds.self, forKey: .timeSeconds)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        tags = try container.decode([String].self, forKey: .tags)
+        isImported = try container.decodeIfPresent(Bool.self, forKey: .isImported) ?? false
+        importedAt = try container.decodeIfPresent(Date.self, forKey: .importedAt)
+        fileCreatedAt = try container.decodeIfPresent(Date.self, forKey: .fileCreatedAt)
+    }
 
     var videoURL: URL {
         URL(fileURLWithPath: videoPath)
@@ -30,7 +87,10 @@ struct Bookmark: Codable, Equatable {
             timeSeconds: timeSeconds,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            tags: tags
+            tags: tags,
+            isImported: isImported,
+            importedAt: importedAt,
+            fileCreatedAt: fileCreatedAt
         )
     }
 }
@@ -64,7 +124,8 @@ final class BookmarkStore {
     func bookmarks(
         scope: BookmarkListScope,
         currentVideoURL: URL?,
-        searchQuery: String
+        searchQuery: String,
+        sort: BookmarkSort = .automatic
     ) -> [Bookmark] {
         loadCacheIfNeeded()
         let normalizedVideoPath = currentVideoURL?.standardizedFileURL.path
@@ -78,6 +139,8 @@ final class BookmarkStore {
                     return bookmark.videoPath == normalizedVideoPath
                 case .allVideos:
                     return true
+                case .imported:
+                    return bookmark.isImported
                 }
             }
             .filter { bookmark in
@@ -90,7 +153,7 @@ final class BookmarkStore {
                     haystack.contains(where: { $0.contains(token) })
                 }
             }
-            .sorted(by: bookmarkSortComparator)
+            .sorted(by: sortComparator(for: sort, scope: scope))
     }
 
     @discardableResult
@@ -112,6 +175,33 @@ final class BookmarkStore {
         schedulePersist()
         notifyDidChange()
         return bookmark
+    }
+
+    @discardableResult
+    func addImportedBookmarks(videoURLs: [URL]) -> [Bookmark] {
+        loadCacheIfNeeded()
+        let importedAt = Date()
+        let bookmarks = videoURLs.map { videoURL in
+            let normalizedURL = videoURL.standardizedFileURL
+            return Bookmark(
+                id: BookmarkID(),
+                videoPath: normalizedURL.path,
+                timeSeconds: 0,
+                createdAt: importedAt,
+                updatedAt: importedAt,
+                tags: Self.sanitizedTags(["imported"]),
+                isImported: true,
+                importedAt: importedAt,
+                fileCreatedAt: Self.fileCreationDate(for: normalizedURL)
+            )
+        }
+        guard !bookmarks.isEmpty else {
+            return []
+        }
+        cache.append(contentsOf: bookmarks)
+        schedulePersist()
+        notifyDidChange()
+        return bookmarks
     }
 
     func bookmark(for id: BookmarkID) -> Bookmark? {
@@ -226,6 +316,60 @@ final class BookmarkStore {
             guard !seen.contains(normalizedTag) else { return }
             seen.insert(normalizedTag)
             result.append(tag)
+        }
+    }
+
+    private static func fileCreationDate(for url: URL) -> Date? {
+        do {
+            let values = try url.resourceValues(forKeys: [.creationDateKey])
+            return values.creationDate
+        } catch {
+            return nil
+        }
+    }
+
+    private func sortComparator(for sort: BookmarkSort, scope: BookmarkListScope) -> (Bookmark, Bookmark) -> Bool {
+        switch sort {
+        case .automatic:
+            return automaticSortComparator(for: scope)
+        case let .importedAt(ascending):
+            return dateComparator(\.importedAt, ascending: ascending)
+        case let .fileCreatedAt(ascending):
+            return dateComparator(\.fileCreatedAt, ascending: ascending)
+        }
+    }
+
+    private func automaticSortComparator(for scope: BookmarkListScope) -> (Bookmark, Bookmark) -> Bool {
+        switch scope {
+        case .imported:
+            return dateComparator(\.importedAt, ascending: false)
+        case .currentVideo, .allVideos:
+            return bookmarkSortComparator
+        }
+    }
+
+    private func dateComparator(
+        _ keyPath: KeyPath<Bookmark, Date?>,
+        ascending: Bool
+    ) -> (Bookmark, Bookmark) -> Bool {
+        { [self] lhs, rhs in
+            let lhsDate = lhs[keyPath: keyPath]
+            let rhsDate = rhs[keyPath: keyPath]
+
+            switch (lhsDate, rhsDate) {
+            case let (lhsDate?, rhsDate?):
+                if lhsDate != rhsDate {
+                    return ascending ? lhsDate < rhsDate : lhsDate > rhsDate
+                }
+            case (.some, nil):
+                return true
+            case (nil, .some):
+                return false
+            case (nil, nil):
+                break
+            }
+
+            return self.bookmarkSortComparator(lhs: lhs, rhs: rhs)
         }
     }
 
