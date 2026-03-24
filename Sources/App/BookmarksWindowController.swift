@@ -1,18 +1,27 @@
 import Cocoa
+import UniformTypeIdentifiers
 
 final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private enum ColumnIdentifier {
         static let thumbnail = NSUserInterfaceItemIdentifier("thumbnail")
         static let time = NSUserInterfaceItemIdentifier("time")
         static let filename = NSUserInterfaceItemIdentifier("filename")
+        static let importedDate = NSUserInterfaceItemIdentifier("importedDate")
+        static let fileCreatedDate = NSUserInterfaceItemIdentifier("fileCreatedDate")
         static let tags = NSUserInterfaceItemIdentifier("tags")
         static let remove = NSUserInterfaceItemIdentifier("remove")
+    }
+
+    private enum SortDescriptorKey {
+        static let importedAt = "importedAt"
+        static let fileCreatedAt = "fileCreatedAt"
     }
 
     private let bookmarkStore: BookmarkStore
     private let thumbnailService: VideoThumbnailService
     private let searchField = NSSearchField(frame: .zero)
-    private let scopeControl = NSSegmentedControl(labels: ["Current Video", "All Videos"], trackingMode: .selectOne, target: nil, action: nil)
+    private let scopeControl = NSSegmentedControl(labels: ["Current Video", "All Videos", "Imported"], trackingMode: .selectOne, target: nil, action: nil)
+    private let importButton = NSButton(title: "Import", target: nil, action: nil)
     private let scrollView = NSScrollView(frame: .zero)
     private let tableView = BookmarkTableView(frame: .zero)
     private let emptyStateLabel = NSTextField(labelWithString: "No bookmarks yet.")
@@ -20,24 +29,41 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private var bookmarks: [Bookmark] = []
     private var currentVideoURL: URL?
     private var currentScope: BookmarkListScope = .currentVideo
+    private var currentSort: BookmarkSort = .automatic
     private var suppressBookmarkOpenOnSelectionChange = false
+
+    private static let importedDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static let fileCreatedDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     var onOpenBookmark: ((Bookmark) -> Void)?
 
     init(bookmarkStore: BookmarkStore, thumbnailService: VideoThumbnailService) {
         self.bookmarkStore = bookmarkStore
         self.thumbnailService = thumbnailService
+        let rootView = BookmarkDropView(frame: NSRect(x: 0, y: 0, width: 1080, height: 560))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 560),
+            contentRect: rootView.frame,
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Bookmarks"
+        window.contentView = rootView
         window.minSize = NSSize(width: 660, height: 420)
         super.init(window: window)
         window.delegate = self
-        configureUI()
+        configureUI(on: rootView)
         installObservers()
         reloadBookmarks()
     }
@@ -74,7 +100,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         window?.makeFirstResponder(nil)
     }
 
-    private func configureUI() {
+    private func configureUI(on rootView: BookmarkDropView) {
         guard let contentView = window?.contentView else { return }
 
         let controlsRow = NSStackView()
@@ -93,8 +119,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         scopeControl.selectedSegment = BookmarkListScope.currentVideo.rawValue
         scopeControl.segmentStyle = .rounded
 
+        importButton.translatesAutoresizingMaskIntoConstraints = false
+        importButton.target = self
+        importButton.action = #selector(handleImportMedia(_:))
+        importButton.bezelStyle = .rounded
+
         controlsRow.addArrangedSubview(searchField)
         controlsRow.addArrangedSubview(scopeControl)
+        controlsRow.addArrangedSubview(importButton)
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
@@ -133,19 +165,39 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         timeColumn.title = "Time"
         timeColumn.minWidth = 110
         timeColumn.width = 120
-        timeColumn.resizingMask = .autoresizingMask
+        timeColumn.resizingMask = []
 
         let filenameColumn = NSTableColumn(identifier: ColumnIdentifier.filename)
         filenameColumn.title = "Filename"
         filenameColumn.minWidth = 180
-        filenameColumn.width = 220
+        filenameColumn.width = 280
         filenameColumn.resizingMask = .autoresizingMask
+
+        let importedDateColumn = NSTableColumn(identifier: ColumnIdentifier.importedDate)
+        importedDateColumn.title = "Imported Date"
+        importedDateColumn.minWidth = 180
+        importedDateColumn.width = 190
+        importedDateColumn.resizingMask = []
+        importedDateColumn.sortDescriptorPrototype = NSSortDescriptor(
+            key: SortDescriptorKey.importedAt,
+            ascending: false
+        )
+
+        let fileCreatedDateColumn = NSTableColumn(identifier: ColumnIdentifier.fileCreatedDate)
+        fileCreatedDateColumn.title = "File Created"
+        fileCreatedDateColumn.minWidth = 180
+        fileCreatedDateColumn.width = 190
+        fileCreatedDateColumn.resizingMask = []
+        fileCreatedDateColumn.sortDescriptorPrototype = NSSortDescriptor(
+            key: SortDescriptorKey.fileCreatedAt,
+            ascending: false
+        )
 
         let tagsColumn = NSTableColumn(identifier: ColumnIdentifier.tags)
         tagsColumn.title = "Tags"
-        tagsColumn.minWidth = 240
-        tagsColumn.width = 300
-        tagsColumn.resizingMask = .autoresizingMask
+        tagsColumn.minWidth = 210
+        tagsColumn.width = 240
+        tagsColumn.resizingMask = []
 
         let removeColumn = NSTableColumn(identifier: ColumnIdentifier.remove)
         removeColumn.title = ""
@@ -159,6 +211,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tableView.addTableColumn(thumbnailColumn)
         tableView.addTableColumn(timeColumn)
         tableView.addTableColumn(filenameColumn)
+        tableView.addTableColumn(importedDateColumn)
+        tableView.addTableColumn(fileCreatedDateColumn)
         tableView.addTableColumn(tagsColumn)
         tableView.addTableColumn(removeColumn)
         scrollView.documentView = tableView
@@ -189,6 +243,10 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor, constant: 20),
             emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.trailingAnchor, constant: -20)
         ])
+
+        rootView.onFileURLsDropped = { [weak self] urls in
+            self?.importMedia(from: urls)
+        }
     }
 
     private func installObservers() {
@@ -212,7 +270,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         bookmarks = bookmarkStore.bookmarks(
             scope: currentScope,
             currentVideoURL: currentVideoURL,
-            searchQuery: searchField.stringValue
+            searchQuery: searchField.stringValue,
+            sort: currentSort
         )
         suppressBookmarkOpenOnSelectionChange = true
         tableView.reloadData()
@@ -242,6 +301,10 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             message = searchField.stringValue.isEmpty
                 ? "No bookmarks saved yet."
                 : "No bookmarks match your current search."
+        case .imported:
+            message = searchField.stringValue.isEmpty
+                ? "No imported media yet."
+                : "No imported media matches your current search."
         }
         emptyStateLabel.stringValue = message
         let isEmpty = bookmarks.isEmpty
@@ -277,6 +340,20 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc
+    private func handleImportMedia(_ sender: Any?) {
+        _ = sender
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.beginSheetModal(for: window!) { [weak self] response in
+            guard response == .OK else { return }
+            self?.importMedia(from: panel.urls)
+        }
+    }
+
+    @objc
     private func handleTableAction(_ sender: Any?) {
         _ = sender
         let clickedColumn = tableView.clickedColumn
@@ -286,6 +363,62 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         openSelectedBookmark()
+    }
+
+    private func importMedia(from urls: [URL]) {
+        let validVideoURLs = urls
+            .filter(\.isFileURL)
+            .map(\.standardizedFileURL)
+            .filter(isVideoURL(_:))
+        guard !validVideoURLs.isEmpty else {
+            return
+        }
+        let importedBookmarks = bookmarkStore.addImportedBookmarks(videoURLs: validVideoURLs)
+        guard !importedBookmarks.isEmpty else {
+            return
+        }
+        currentScope = .imported
+        scopeControl.selectedSegment = BookmarkListScope.imported.rawValue
+        reloadBookmarks(selecting: importedBookmarks.first?.id)
+    }
+
+    private func isVideoURL(_ url: URL) -> Bool {
+        do {
+            let values = try url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
+            if values.isDirectory == true {
+                return false
+            }
+            if let contentType = values.contentType {
+                return contentType.conforms(to: .movie)
+            }
+        } catch {
+            return false
+        }
+        return false
+    }
+
+    private static func formattedImportedDate(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        return importedDateFormatter.string(from: date)
+    }
+
+    private static func formattedFileCreatedDate(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        return fileCreatedDateFormatter.string(from: date)
+    }
+
+    private func bookmarkSort(from sortDescriptors: [NSSortDescriptor]) -> BookmarkSort {
+        guard let sortDescriptor = sortDescriptors.first, let key = sortDescriptor.key else {
+            return .automatic
+        }
+        switch key {
+        case SortDescriptorKey.importedAt:
+            return .importedAt(ascending: sortDescriptor.ascending)
+        case SortDescriptorKey.fileCreatedAt:
+            return .fileCreatedAt(ascending: sortDescriptor.ascending)
+        default:
+            return .automatic
+        }
     }
 }
 
@@ -320,9 +453,19 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
             let cell = reusableFilenameCell(in: tableView)
             cell.configure(filename: bookmark.videoDisplayName)
             return cell
+        case ColumnIdentifier.importedDate:
+            let cell = reusableDateCell(in: tableView, identifier: "BookmarkImportedDateCellView")
+            cell.configure(value: Self.formattedImportedDate(bookmark.importedAt))
+            return cell
+        case ColumnIdentifier.fileCreatedDate:
+            let cell = reusableDateCell(in: tableView, identifier: "BookmarkFileCreatedDateCellView")
+            cell.configure(value: Self.formattedFileCreatedDate(bookmark.fileCreatedAt))
+            return cell
         case ColumnIdentifier.tags:
             let cell = reusableTagsCell(in: tableView)
-            cell.configure(bookmark: bookmark, delegate: self)
+            cell.configure(bookmark: bookmark, delegate: self) { [weak self] in
+                self?.suppressBookmarkOpenOnSelectionChange = true
+            }
             return cell
         case ColumnIdentifier.remove:
             let cell = reusableRemoveCell(in: tableView)
@@ -337,13 +480,27 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         _ = notification
+        let tagsColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.tags)
+        let removeColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.remove)
+        let interactionColumn = tableView.mouseDownColumn
+        if interactionColumn == tagsColumnIndex || interactionColumn == removeColumnIndex {
+            suppressBookmarkOpenOnSelectionChange = false
+            return
+        }
         guard !suppressBookmarkOpenOnSelectionChange else {
+            suppressBookmarkOpenOnSelectionChange = false
             return
         }
         guard window?.firstResponder !== tableView.currentEditor() else {
             return
         }
         openSelectedBookmark()
+    }
+
+    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+        _ = oldDescriptors
+        currentSort = bookmarkSort(from: tableView.sortDescriptors)
+        reloadBookmarks()
     }
 
     private func reusableThumbnailCell(in tableView: NSTableView) -> BookmarkThumbnailCellView {
@@ -363,6 +520,19 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
         }
         let cell = BookmarkTimeCellView(frame: .zero)
         cell.identifier = identifier
+        return cell
+    }
+
+    private func reusableDateCell(
+        in tableView: NSTableView,
+        identifier: String
+    ) -> BookmarkDateCellView {
+        let reusableIdentifier = NSUserInterfaceItemIdentifier(identifier)
+        if let cell = tableView.makeView(withIdentifier: reusableIdentifier, owner: self) as? BookmarkDateCellView {
+            return cell
+        }
+        let cell = BookmarkDateCellView(frame: .zero)
+        cell.identifier = reusableIdentifier
         return cell
     }
 
@@ -416,6 +586,14 @@ extension BookmarksWindowController: NSSearchFieldDelegate, NSTextFieldDelegate 
 private final class BookmarkTableView: NSTableView {
     var onReturnKey: (() -> Void)?
     var onDeleteKey: (() -> Void)?
+    private(set) var mouseDownColumn: Int = -1
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        mouseDownColumn = column(at: point)
+        super.mouseDown(with: event)
+        mouseDownColumn = -1
+    }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -635,6 +813,36 @@ private final class BookmarkTimeCellView: NSTableCellView {
     }
 }
 
+private final class BookmarkDateCellView: NSTableCellView {
+    private let valueLabel = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        valueLabel.translatesAutoresizingMaskIntoConstraints = false
+        valueLabel.font = .systemFont(ofSize: 13, weight: .regular)
+        valueLabel.lineBreakMode = .byTruncatingTail
+        valueLabel.textColor = .secondaryLabelColor
+
+        addSubview(valueLabel)
+        NSLayoutConstraint.activate([
+            valueLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(value: String) {
+        valueLabel.stringValue = value
+    }
+}
+
 private final class BookmarkFilenameCellView: NSTableCellView {
     private let filenameLabel = NSTextField(labelWithString: "")
 
@@ -692,9 +900,14 @@ private final class BookmarkTagsCellView: NSTableCellView {
         nil
     }
 
-    func configure(bookmark: Bookmark, delegate: NSTextFieldDelegate) {
+    func configure(
+        bookmark: Bookmark,
+        delegate: NSTextFieldDelegate,
+        onInteraction: @escaping () -> Void
+    ) {
         tagsTextField.bookmarkID = bookmark.id
         tagsTextField.delegate = delegate
+        tagsTextField.onInteraction = onInteraction
         tagsTextField.stringValue = BookmarkStore.tagString(from: bookmark.tags)
     }
 }
@@ -747,4 +960,65 @@ private final class BookmarkRemoveCellView: NSTableCellView {
 
 private final class BookmarkTagsTextField: NSTextField {
     var bookmarkID: BookmarkID?
+    var onInteraction: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onInteraction?()
+        if let tableView = enclosingTableView {
+            let row = tableView.row(for: self)
+            if row >= 0, tableView.selectedRow != row {
+                tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+        }
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    private var enclosingTableView: NSTableView? {
+        var view = superview
+        while let currentView = view {
+            if let tableView = currentView as? NSTableView {
+                return tableView
+            }
+            view = currentView.superview
+        }
+        return nil
+    }
+}
+
+private final class BookmarkDropView: NSView {
+    var onFileURLsDropped: (([URL]) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerForDraggedTypes([.fileURL])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let urls = fileURLs(from: sender.draggingPasteboard)
+        guard !urls.isEmpty else { return [] }
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = fileURLs(from: sender.draggingPasteboard)
+        guard !urls.isEmpty else { return false }
+        onFileURLsDropped?(urls)
+        return true
+    }
+
+    private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        let objects = pasteboard.readObjects(forClasses: [NSURL.self], options: options) ?? []
+        return objects.compactMap { object in
+            guard let url = object as? URL else { return nil }
+            return url.isFileURL ? url : nil
+        }
+    }
 }
