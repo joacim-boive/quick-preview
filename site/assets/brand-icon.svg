@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">QuickPreview icon</title>
+  <desc id="desc">A glowing play triangle inside a camera aperture.</desc>
+  <defs>
+    <linearGradient id="bg" x1="10%" y1="10%" x2="90%" y2="90%">
+      <stop offset="0%" stop-color="#48d4ff" />
+      <stop offset="100%" stop-color="#175cff" />
+    </linearGradient>
+    <linearGradient id="beam" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#dffcff" />
+      <stop offset="100%" stop-color="#ffffff" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)" />
+  <circle cx="64" cy="64" r="40" fill="none" stroke="rgba(255,255,255,0.32)" stroke-width="10" />
+  <path d="M64 18 80 34 72 64 48 64 40 34Z" fill="rgba(8,22,34,0.34)" />
+  <path d="M110 64 94 80 64 72 64 48 94 40Z" fill="rgba(8,22,34,0.34)" />
+  <path d="M64 110 48 94 56 64 80 64 88 94Z" fill="rgba(8,22,34,0.34)" />
+  <path d="M18 64 34 48 64 56 64 80 34 88Z" fill="rgba(8,22,34,0.34)" />
+  <circle cx="64" cy="64" r="24" fill="#7df0ff" fill-opacity="0.22" />
+  <path d="M54 44c0-2.7 3-4.3 5.3-2.8l24.5 15.8c2.1 1.4 2.1 4.4 0 5.8L59.3 78.6c-2.3 1.5-5.3-.1-5.3-2.8V44Z" fill="url(#beam)" />
+</svg>

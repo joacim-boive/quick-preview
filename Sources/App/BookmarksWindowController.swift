@@ -970,6 +970,7 @@ private final class BookmarkTagsCellView: NSTableCellView {
 
         tagsTextField.translatesAutoresizingMaskIntoConstraints = false
         tagsTextField.isEditable = true
+        tagsTextField.isSelectable = true
         tagsTextField.isBordered = true
         tagsTextField.isBezeled = true
         tagsTextField.placeholderString = "Add tags separated by commas"
@@ -1089,6 +1090,10 @@ private final class BookmarkTagsTextField: NSTextField {
     var bookmarkID: BookmarkID?
     var onInteraction: (() -> Void)?
 
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
         onInteraction?()
         if let tableView = enclosingTableView {
@@ -1099,6 +1104,12 @@ private final class BookmarkTagsTextField: NSTextField {
         }
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        // Ensure right-click menus show Paste/Copy for this text field.
+        window?.makeFirstResponder(self)
+        super.rightMouseDown(with: event)
     }
 
     private var enclosingTableView: NSTableView? {

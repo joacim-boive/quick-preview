@@ -55,6 +55,42 @@ final class SubscriptionController {
 
     private(set) var subscriptionProduct: Product?
 
+    // Local development bypass:
+    // - Default: enabled for DEBUG builds so you can run without an App Store subscription.
+    // - Optional env var override:
+    //   - QUICKPREVIEW_DEV_ENTITLED=1 enables (even for Release)
+    //   - QUICKPREVIEW_DEV_ENTITLED=0 disables (even for Debug)
+    private static func isDevEntitledBypassEnabled() -> Bool {
+        if let raw = ProcessInfo.processInfo.environment["QUICKPREVIEW_DEV_ENTITLED"] {
+            switch raw.lowercased() {
+            case "0", "false", "no":
+                return false
+            case "1", "true", "yes":
+                return true
+            default:
+                return true
+            }
+        }
+
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private func makeDevEntitlementSnapshot(now: Date) -> EntitlementSnapshot {
+        let expirationDate = now.addingTimeInterval(365 * 24 * 60 * 60)
+        return EntitlementSnapshot(
+            productID: configuration.productID,
+            grantKind: .subscriptionActive,
+            lastVerifiedAt: now,
+            expirationDate: expirationDate,
+            transactionID: nil,
+            originalTransactionID: nil
+        )
+    }
+
     init(
         configuration: SubscriptionConfiguration = .default,
         entitlementCache: EntitlementCache = EntitlementCache(),
@@ -81,6 +117,13 @@ final class SubscriptionController {
         accessState = .verifying
         let cachedSnapshot = entitlementCache.load()
         let verifiedAt = nowProvider()
+
+        if Self.isDevEntitledBypassEnabled() {
+            let snapshot = makeDevEntitlementSnapshot(now: verifiedAt)
+            let devState: SubscriptionAccessState = .subscriptionActive(snapshot)
+            accessState = devState
+            return devState
+        }
 
         do {
             let product = try await loadProduct()
