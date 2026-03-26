@@ -1,15 +1,24 @@
 import Cocoa
+import StoreKit
 import UniformTypeIdentifiers
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let hotkeyManager = GlobalHotkeyManager()
     private let bookmarkStore = BookmarkStore()
     private let thumbnailService = VideoThumbnailService()
     private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
+    private let subscriptionController = SubscriptionController()
     private var windowController: MainPlayerWindowController?
     private var helpWindowController: HelpWindowController?
     private var bookmarksWindowController: BookmarksWindowController?
+    private var paywallWindowController: PaywallWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
+    private var accessRefreshTask: Task<Void, Never>?
+    private var pendingPostEntitlementAction: (() -> Void)?
+    private var shortcutHintText: String?
+    private var didCenterMainWindowOnFirstPresentation = false
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
     private let finderSelectionMonitorQueue = DispatchQueue(
         label: "quickpreview.finder-selection-monitor",
         qos: .utility
@@ -26,39 +35,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         buildMainMenu()
-        let controller = ensureWindowController()
-        controller.showWindow(nil)
-        controller.window?.center()
-        controller.window?.makeKeyAndOrderFront(nil)
-        controller.window?.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        configureSubscriptionController()
+        subscriptionController.start()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self else { return }
-            if !NSApp.windows.contains(where: { $0.isVisible }) {
-                let controller = self.ensureWindowController()
-                controller.showWindow(nil)
-                controller.window?.center()
-                controller.window?.makeKeyAndOrderFront(nil)
-                controller.window?.orderFrontRegardless()
-                NSApp.activate(ignoringOtherApps: true)
-            }
+            self?.recoverVisibleWindowIfNeeded()
         }
 
         // Ctrl+Space can quickly reopen/focus the player window.
         let hotkeyRegistered = hotkeyManager.registerSpaceHotkey { [weak self] in
-            guard let self else { return }
-            let controller = self.ensureWindowController()
-            let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
-            if !openedFinderVideo {
-                controller.showWindow(nil)
-                controller.window?.makeKeyAndOrderFront(nil)
+            self?.requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+                guard let self else { return }
+                let controller = self.ensureWindowController()
+                let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
+                if !openedFinderVideo {
+                    self.revealPlayerWindow(centerIfNeeded: false)
+                }
             }
-            controller.window?.orderFrontRegardless()
-            NSApp.activate(ignoringOtherApps: true)
         }
 
         let shortcutName = hotkeyManager.activeShortcutName
-        ensureWindowController().setShortcutHint("Shortcut: \(shortcutName)")
+        shortcutHintText = "Shortcut: \(shortcutName)"
 
         if !hotkeyRegistered {
             showStartupAlert(
@@ -68,21 +64,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         startFinderSelectionMonitor()
+        requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+            self?.revealPlayerWindow(centerIfNeeded: true)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        accessRefreshTask?.cancel()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
         finderSelectionMonitorTimer?.cancel()
         finderSelectionMonitorTimer = nil
+        if let appDidBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            let controller = ensureWindowController()
-            controller.showWindow(nil)
-            controller.window?.makeKeyAndOrderFront(nil)
-            controller.window?.orderFrontRegardless()
+            if let paywallWindowController, paywallWindowController.window?.isVisible == true {
+                paywallWindowController.showWindow(nil)
+                paywallWindowController.window?.makeKeyAndOrderFront(nil)
+            } else {
+                requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+                    self?.revealPlayerWindow(centerIfNeeded: false)
+                }
+            }
         }
         return true
     }
@@ -94,20 +101,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
         if first.isFileURL {
-            ensureWindowController().openVideo(url: first)
+            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+                self?.ensureWindowController().openVideo(url: first)
+            }
         }
     }
 
     @objc
     private func handleOpenFromMenu(_ sender: Any?) {
-        ensureWindowController().presentOpenVideoPanel()
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            self?.ensureWindowController().presentOpenVideoPanel()
+        }
         _ = sender
     }
 
     @objc
     private func handleOpenFinderSelectionFromMenu(_ sender: Any?) {
-        let controller = ensureWindowController()
-        _ = controller.openFinderSelectionIfVideo(showErrors: true)
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            guard let self else { return }
+            let controller = self.ensureWindowController()
+            _ = controller.openFinderSelectionIfVideo(showErrors: true)
+        }
         _ = sender
     }
 
@@ -126,7 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc
     private func handleShowBookmarks(_ sender: Any?) {
-        showBookmarksWindow(selecting: nil)
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            self?.showBookmarksWindow(selecting: nil)
+        }
         _ = sender
     }
 
@@ -248,26 +264,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        let controller = ensureWindowController()
+        let isEntitled = subscriptionController.accessState.isEntitled
+        let controller = windowController
         switch menuItem.tag {
         case loopMenuItemTag:
-            menuItem.state = controller.loopEnabled() ? .on : .off
-            return controller.hasLoadedVideo()
+            menuItem.state = controller?.loopEnabled() == true ? .on : .off
+            return isEntitled && controller?.hasLoadedVideo() == true
         case protectedMediaMenuItemTag:
             let isUnlocked = protectedBookmarksSessionController.isUnlocked
             menuItem.title = isUnlocked ? "Lock Protected Media" : "Unlock Protected Media..."
-            return true
+            return isEntitled
         case paranoidModeMenuItemTag:
             menuItem.title = protectedBookmarksSessionController.isParanoidModeEnabled
                 ? "Disable Paranoid Mode..."
                 : "Enable Paranoid Mode..."
-            return protectedBookmarksSessionController.isUnlocked
+            return isEntitled && protectedBookmarksSessionController.isUnlocked
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
                 let rotationDegrees = menuItem.tag - rotationMenuItemBaseTag
-                menuItem.state = rotationDegrees == controller.rotationDegrees() ? .on : .off
-                return controller.hasLoadedVideo()
+                menuItem.state = rotationDegrees == controller?.rotationDegrees() ? .on : .off
+                return isEntitled && controller?.hasLoadedVideo() == true
             }
             return true
         }
@@ -283,7 +300,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let filePath = components.queryItems?.first(where: { $0.name == "file" })?.value
         guard let filePath else { return }
-        ensureWindowController().openVideo(url: URL(fileURLWithPath: filePath))
+        requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+            self?.ensureWindowController().openVideo(url: URL(fileURLWithPath: filePath))
+        }
     }
 
     private func ensureWindowController() -> MainPlayerWindowController {
@@ -291,6 +310,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return windowController
         }
         let controller = MainPlayerWindowController(bookmarkStore: bookmarkStore)
+        if let shortcutHintText {
+            controller.setShortcutHint(shortcutHintText)
+        }
         controller.onShowBookmarksRequested = { [weak self] bookmark in
             self?.showBookmarksWindow(selecting: bookmark)
         }
@@ -342,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func showBookmarksWindow(selecting bookmark: Bookmark?) {
         let controller = ensureBookmarksWindowController()
-        controller.setCurrentVideoURL(ensureWindowController().loadedVideoURL())
+        controller.setCurrentVideoURL(windowController?.loadedVideoURL())
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -519,6 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         DispatchQueue.main.async { [weak self] in
             guard
                 let self,
+                self.subscriptionController.accessState.isEntitled,
                 let controller = self.windowController,
                 controller.hasLoadedVideo(),
                 selectedVideoURL != controller.loadedVideoURL()
@@ -642,6 +665,251 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         return password
+    }
+
+    private func configureSubscriptionController() {
+        subscriptionController.onAccessStateChange = { [weak self] state in
+            self?.handleSubscriptionAccessStateChange(state)
+        }
+
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAccessStateInBackground()
+            }
+        }
+    }
+
+    private func refreshAccessStateInBackground() {
+        accessRefreshTask?.cancel()
+        accessRefreshTask = Task { [weak self] in
+            _ = await self?.subscriptionController.refreshEntitlements()
+        }
+    }
+
+    private func requestSubscriptionAccess(
+        showLoadingWindow: Bool,
+        action: @escaping () -> Void
+    ) {
+        pendingPostEntitlementAction = action
+
+        if subscriptionController.accessState.isEntitled {
+            let pendingAction = pendingPostEntitlementAction
+            pendingPostEntitlementAction = nil
+            pendingAction?()
+            refreshAccessStateInBackground()
+            return
+        }
+
+        if showLoadingWindow || subscriptionController.accessState == .unknown || subscriptionController.accessState == .verifying {
+            presentLoadingWindow()
+        }
+
+        refreshAccessStateInBackground()
+    }
+
+    private func handleSubscriptionAccessStateChange(_ state: SubscriptionAccessState) {
+        switch state {
+        case .unknown, .verifying:
+            presentLoadingWindow()
+        case .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            dismissPaywallWindowIfNeeded()
+            let pendingAction = pendingPostEntitlementAction
+            pendingPostEntitlementAction = nil
+            if let pendingAction {
+                pendingAction()
+            } else if !isMainWindowVisible {
+                revealPlayerWindow(centerIfNeeded: false)
+            }
+        case .expired, .revoked, .refunded, .notEntitled:
+            hideEntitledWindows()
+            presentBlockedPaywall(for: state)
+        }
+    }
+
+    private func presentLoadingWindow() {
+        let controller = ensurePaywallWindowController()
+        controller.apply(mode: .loading, isBusy: false)
+        controller.showWindow(nil)
+        controller.window?.center()
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func presentBlockedPaywall(for state: SubscriptionAccessState) {
+        let controller = ensurePaywallWindowController()
+        controller.apply(
+            mode: .blocked(state, makePaywallProductDetails()),
+            isBusy: false
+        )
+        controller.showWindow(nil)
+        controller.window?.center()
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func ensurePaywallWindowController() -> PaywallWindowController {
+        if let paywallWindowController {
+            return paywallWindowController
+        }
+
+        let controller = PaywallWindowController()
+        controller.onSubscribe = { [weak self] in
+            self?.startPurchaseFlow()
+        }
+        controller.onRestorePurchases = { [weak self] in
+            self?.startRestoreFlow()
+        }
+        controller.onManageSubscription = { [weak self] in
+            self?.subscriptionController.openManageSubscriptions()
+        }
+        controller.onShowHelp = { [weak self] in
+            self?.handleShowGuide(nil)
+        }
+        controller.onQuit = {
+            NSApp.terminate(nil)
+        }
+        paywallWindowController = controller
+        return controller
+    }
+
+    private func makePaywallProductDetails() -> PaywallProductDetails? {
+        guard let product = subscriptionController.subscriptionProduct else {
+            return nil
+        }
+
+        return PaywallProductDetails(
+            displayName: product.displayName,
+            displayPrice: product.displayPrice
+        )
+    }
+
+    private func startPurchaseFlow() {
+        let controller = ensurePaywallWindowController()
+        controller.apply(
+            mode: .blocked(subscriptionController.accessState, makePaywallProductDetails()),
+            isBusy: true
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.subscriptionController.purchaseSubscription()
+            switch result {
+            case .success:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+            case .pending:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(
+                    title: "Purchase Pending",
+                    message: "The App Store purchase is pending approval."
+                )
+            case .cancelled:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+            case .failed(let message):
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(title: "Purchase Failed", message: message)
+            }
+        }
+    }
+
+    private func startRestoreFlow() {
+        let controller = ensurePaywallWindowController()
+        controller.apply(
+            mode: .blocked(subscriptionController.accessState, makePaywallProductDetails()),
+            isBusy: true
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.subscriptionController.restorePurchases()
+            switch result {
+            case .restored:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+            case .noEntitlement:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(
+                    title: "Nothing to Restore",
+                    message: "QuickPreview could not find an active subscription to restore for this Apple account."
+                )
+            case .failed(let message):
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(title: "Restore Failed", message: message)
+            }
+        }
+    }
+
+    private func dismissPaywallWindowIfNeeded() {
+        paywallWindowController?.close()
+    }
+
+    private func revealPlayerWindow(centerIfNeeded: Bool) {
+        let controller = ensureWindowController()
+        controller.showWindow(nil)
+        if centerIfNeeded && !didCenterMainWindowOnFirstPresentation {
+            controller.window?.center()
+            didCenterMainWindowOnFirstPresentation = true
+        }
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.window?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private var isMainWindowVisible: Bool {
+        windowController?.window?.isVisible == true
+    }
+
+    private func hideEntitledWindows() {
+        windowController?.window?.orderOut(nil)
+        bookmarksWindowController?.close()
+        protectedBookmarksSessionController.lock()
+    }
+
+    private func recoverVisibleWindowIfNeeded() {
+        if NSApp.windows.contains(where: { $0.isVisible }) {
+            return
+        }
+
+        switch subscriptionController.accessState {
+        case .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            revealPlayerWindow(centerIfNeeded: false)
+        case .expired, .revoked, .refunded, .notEntitled:
+            presentBlockedPaywall(for: subscriptionController.accessState)
+        case .unknown, .verifying:
+            presentLoadingWindow()
+            refreshAccessStateInBackground()
+        }
     }
 }
 

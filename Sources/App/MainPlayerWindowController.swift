@@ -109,9 +109,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    func revealWindow() {
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+    }
+
     func openVideo(url: URL, shouldRevealWindow: Bool = true) {
         if shouldRevealWindow {
-            showWindow(nil)
+            revealWindow()
         } else {
             window?.orderFront(nil)
         }
@@ -355,6 +361,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func presentOpenVideoPanel() {
+        revealWindow()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie]
         panel.canChooseFiles = true
