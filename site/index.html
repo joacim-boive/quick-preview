@@ -6,7 +6,7 @@
     <title>QuickPreview | Fast Video Review for macOS</title>
     <meta
       name="description"
-      content="QuickPreview is a lightweight macOS video player built for fast review, precise looping, bookmark management, protected media access, and Finder-friendly workflows."
+      content="QuickPreview is a lightweight macOS video player built for fast review, a powerful bookmark manager, remembered clip settings, and privacy-first protected media access."
     />
     <meta name="theme-color" content="#07131c" />
     <meta property="og:type" content="website" />
@@ -16,7 +16,7 @@
     />
     <meta
       property="og:description"
-      content="Fast, precise, and distraction-free video review with looping, searchable bookmarks, and protected media access."
+      content="Fast, precise, and distraction-free video review with organized bookmarks, remembered clip states, and dual-layer privacy."
     />
     <meta property="og:image" content="assets/og-preview.svg" />
     <meta name="twitter:card" content="summary_large_image" />
@@ -26,7 +26,7 @@
     />
     <meta
       name="twitter:description"
-      content="A lightweight macOS video player for instant review, precise looping, bookmark organization, and clean playback control."
+      content="A lightweight macOS video player for instant review, reusable bookmarks, remembered clip settings, and privacy-first playback."
     />
     <meta name="twitter:image" content="assets/og-preview.svg" />
     <link rel="icon" href="assets/brand-icon.png" type="image/png" />
@@ -66,7 +66,11 @@
             data-nav-toggle
           >
             <span class="sr-only">Toggle navigation</span>
-            Menu
+            <span class="nav-toggle-bars" aria-hidden="true">
+              <span class="nav-toggle-bar"></span>
+              <span class="nav-toggle-bar"></span>
+              <span class="nav-toggle-bar"></span>
+            </span>
           </button>
 
           <nav
@@ -89,43 +93,22 @@
         <section class="hero">
           <div class="container hero-grid">
             <div class="hero-copy">
-              <p class="eyebrow">Built for rapid review</p>
-              <h1 class="display">See the frame. Keep the flow.</h1>
+              <p class="eyebrow">Fast review, less clutter</p>
+              <h1 class="display">Review faster. Remember more. Keep it private.</h1>
               <p class="lede">
-                QuickPreview is a focused macOS video player for people who
-                need instant playback, precise looping, organized bookmarks, and
-                secure protected-media access without wrestling with bloated
-                editing software.
+                QuickPreview is a focused macOS video player for people who want
+                the speed of a quick look, the recall of a real bookmark system,
+                and the confidence of protected access when a clip is not meant
+                for casual eyes.
               </p>
 
               <div class="button-row">
                 <a class="button button-primary" href="features/"
-                  >Explore features</a
+                  >View all features</a
                 >
-                <a class="button button-secondary" href="support/"
-                  >Get support</a
+                <a class="button button-secondary" href="pricing/"
+                  >See pricing</a
                 >
-              </div>
-
-              <div class="hero-facts" aria-label="QuickPreview highlights">
-                <div class="fact-chip">
-                  <strong>Precise control</strong>
-                  <span>Fine seek, coarse seek, and frame-step playback.</span>
-                </div>
-                <div class="fact-chip">
-                  <strong>Loop faster</strong>
-                  <span
-                    >Review full clips or selected segments without
-                    friction.</span
-                  >
-                </div>
-                <div class="fact-chip">
-                  <strong>Stay organized</strong>
-                  <span
-                    >Use the bookmark manager to collect moments across clips,
-                    tags, and private states.</span
-                  >
-                </div>
               </div>
             </div>
 
@@ -137,7 +120,7 @@
                 <div class="hero-shot-frame">
                   <img
                     src="assets/images/quickpreview-guide-infographic.png"
-                    alt="QuickPreview interface showing loop controls, precision timeline tools, rotation, and audio boost."
+                    alt="QuickPreview interface showing timeline controls, loop tools, rotation, and audio controls."
                     width="1024"
                     height="768"
                     fetchpriority="high"
@@ -145,23 +128,23 @@
                 </div>
                 <div class="panel-meta">
                   <div class="meta-card">
-                    <strong>Loop review</strong>
+                    <strong>Bookmark recall</strong>
                     <span
-                      >Set a range, replay it instantly, and keep eyes on the
-                      critical moment.</span
+                      >Build a searchable library of saved moments with previews
+                      you can trust at a glance.</span
                     >
                   </div>
                   <div class="meta-card">
-                    <strong>Dual protection</strong>
+                    <strong>Clip memory</strong>
                     <span
-                      >Unlock protected bookmarks with macOS authentication and
-                      an optional second password layer.</span
+                      >Reopen a clip and pick up with the same window context,
+                      playback position, and review setup.</span
                     >
                   </div>
                 </div>
                 <p class="caption">
-                  The app is built for focused inspection: no editing timeline,
-                  no heavy project setup, just fast playback and exact control.
+                  Built for review work, not editing sprawl. The deep toolset is
+                  there when you need it, and out of the way when you do not.
                 </p>
               </div>
             </aside>
@@ -171,86 +154,42 @@
         <section class="section section-spacious">
           <div class="container">
             <div class="section-heading">
-              <p class="eyebrow">Why it stands out</p>
-              <h2 class="display">The shortest path from file to insight.</h2>
+              <p class="eyebrow">Why teams keep it open</p>
+              <h2 class="display">Three reasons it earns a permanent place in your workflow.</h2>
               <p class="section-copy">
-                Every interaction is designed to reduce friction when you are
-                reviewing motion, checking timing, or repeatedly inspecting a
-                detail.
+                The landing page should be simple because the value proposition is
+                simple: QuickPreview helps you find moments, return to context,
+                and keep sensitive material protected.
               </p>
             </div>
 
-            <div class="card-grid">
+            <div class="card-grid card-grid-3">
               <article class="feature-card">
                 <span class="feature-kicker">01</span>
-                <h3>Instant open-and-review workflow</h3>
+                <h3>A bookmark manager you will actually rely on</h3>
                 <p class="card-copy">
-                  Drag in a clip and start immediately. No timeline setup, no
-                  project import flow, and no unnecessary controls competing for
-                  attention.
+                  Save exact moments into a sortable, searchable library with
+                  thumbnail previews, tags, and direct media imports so your
+                  references stay useful long after the first review session.
                 </p>
               </article>
               <article class="feature-card">
                 <span class="feature-kicker">02</span>
-                <h3>Frame-level playback confidence</h3>
+                <h3>Every clip keeps its own setup</h3>
                 <p class="card-copy">
-                  Fine and coarse seek controls help you move with intent, while
-                  frame-step behavior makes detailed inspection feel dependable
-                  instead of fiddly.
+                  QuickPreview remembers the state that matters for each clip,
+                  including screen position, window size, playback position, time
+                  range, sound, and other review context, so reopening feels
+                  instant instead of repetitive.
                 </p>
               </article>
               <article class="feature-card">
                 <span class="feature-kicker">03</span>
-                <h3>Looping that keeps you focused</h3>
+                <h3>Privacy with a second lock when you need it</h3>
                 <p class="card-copy">
-                  Replay the full clip or isolate just the section you need. It
-                  is built for comparison, technique review, and repeat
-                  watching.
-                </p>
-              </article>
-              <article class="feature-card">
-                <span class="feature-kicker">04</span>
-                <h3>Finder-aware clip switching</h3>
-                <p class="card-copy">
-                  With a video already loaded, selecting a new file in Finder
-                  can switch playback directly, which keeps browsing and
-                  playback tightly connected.
-                </p>
-              </article>
-              <article class="feature-card">
-                <span class="feature-kicker">05</span>
-                <h3>Bookmark manager built for real review work</h3>
-                <p class="card-copy">
-                  Save exact moments, browse them across clips, search faster,
-                  and keep a reusable reference library instead of re-finding
-                  the same detail over and over.
-                </p>
-              </article>
-              <article class="feature-card">
-                <span class="feature-kicker">06</span>
-                <h3>Dual-layer protection for sensitive material</h3>
-                <p class="card-copy">
-                  Protected media can require both macOS device-owner
-                  authentication and an extra paranoid-mode password before
-                  private bookmarks are revealed.
-                </p>
-              </article>
-              <article class="feature-card">
-                <span class="feature-kicker">07</span>
-                <h3>Quick close when you are done</h3>
-                <p class="card-copy">
-                  Press <strong>Esc</strong> to close the current preview window
-                  immediately, which keeps fast review sessions feeling light and
-                  disposable instead of sticky.
-                </p>
-              </article>
-              <article class="feature-card">
-                <span class="feature-kicker">08</span>
-                <h3>Per-clip settings that resume where you left off</h3>
-                <p class="card-copy">
-                  QuickPreview preserves clip-specific playback state like
-                  position, loop preference, volume, and window context so you
-                  can reopen a clip and continue instantly.
+                  Protected media can require macOS authentication and an
+                  optional second password layer, giving sensitive material a
+                  deliberate barrier instead of wishful privacy.
                 </p>
               </article>
             </div>
@@ -262,39 +201,31 @@
             <div class="glass-panel sticky-panel">
               <div class="hero-panel-content visual-stack">
                 <div class="section-heading">
-                  <p class="eyebrow">Core workflow</p>
-                  <h2 class="display">Made for repeated review sessions.</h2>
+                  <p class="eyebrow">Proof in the workflow</p>
+                  <h2 class="display">Fast enough for instinctive review.</h2>
                 </div>
 
                 <div class="metrics">
                   <div class="metric">
                     <strong>0.1s</strong>
-                    <span
-                      >Fine-seek keyboard adjustment for quick
-                      micro-corrections.</span
-                    >
+                    <span>Fine seek for small corrections when timing matters.</span>
                   </div>
                   <div class="metric">
                     <strong>1.0s</strong>
-                    <span
-                      >Coarse-seek jump when you need faster navigation.</span
-                    >
+                    <span>Coarse seek for moving through longer clips quickly.</span>
                   </div>
                   <div class="metric">
                     <strong>AB</strong>
-                    <span
-                      >Selected segment replay for focused loop
-                      inspection.</span
-                    >
+                    <span>Mark a range and replay only the part worth studying.</span>
                   </div>
                 </div>
 
                 <div class="mini-panel">
-                  <strong>One clear promise</strong>
+                  <strong>What supports the core promise</strong>
                   <p>
-                    QuickPreview helps you review motion and timing quickly,
-                    organize the important moments, and protect sensitive ones
-                    without putting a full editor between you and the clip.
+                    Drag and drop clips, switch directly from Finder, frame-step
+                    through details, rotate awkward footage, boost quiet audio,
+                    and close the window instantly when you are done.
                   </p>
                 </div>
               </div>
@@ -303,90 +234,28 @@
             <div class="visual-stack">
               <article class="timeline-card">
                 <span class="timeline-step">Step 01</span>
-                <h3>Load a clip and jump straight in</h3>
+                <h3>Open a clip without breaking your flow</h3>
                 <p class="list-copy">
-                  Open a video, hit play, and start reviewing immediately with
-                  keyboard controls that support fast stop-start work.
+                  Start from File Open, drag and drop, Finder selection, or the
+                  optional background shortcut when you want QuickPreview ready
+                  in seconds.
                 </p>
               </article>
               <article class="timeline-card">
                 <span class="timeline-step">Step 02</span>
-                <h3>Dial in the exact moment</h3>
+                <h3>Scrub, seek, frame-step, and loop with intent</h3>
                 <p class="list-copy">
-                  Scrub, fine-seek, coarse-seek, or frame-step to pinpoint the
-                  part of the clip that matters. The player is optimized for
-                  repetition and timing work.
+                  QuickPreview gives you the control to move fast when scanning
+                  and slow down exactly when the clip deserves a closer look.
                 </p>
               </article>
               <article class="timeline-card">
                 <span class="timeline-step">Step 03</span>
-                <h3>Loop what matters, then save the exact moment</h3>
+                <h3>Save the moment and come back to it properly</h3>
                 <p class="list-copy">
-                  Repeat the whole file or isolate a segment, then bookmark the
-                  important point so you can come back later without losing the
-                  review flow.
-                </p>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section class="section section-spacious">
-          <div class="container">
-            <div class="section-heading">
-              <p class="eyebrow">Extended toolset</p>
-              <h2 class="display">More than a play button.</h2>
-              <p class="section-copy">
-                The product visuals already point to a broader utility layer for
-                serious clip review, including segment looping, rotation, and
-                audio boost support.
-              </p>
-            </div>
-
-            <div class="card-grid card-grid-3">
-              <article class="feature-card">
-                <h3>Dual scrubber loop selection</h3>
-                <p class="card-copy">
-                  Mark a start point and end point for repeated playback when
-                  you are reviewing a gesture, transition, movement, or line
-                  delivery.
-                </p>
-              </article>
-              <article class="feature-card">
-                <h3>Rotation and audio boost</h3>
-                <p class="card-copy">
-                  Useful supporting controls help difficult source material stay
-                  readable instead of slowing the review process down.
-                </p>
-              </article>
-              <article class="feature-card">
-                <h3>Remembered clip state</h3>
-                <p class="card-copy">
-                  Smart state retention helps repeat work feel smoother by
-                  preserving the context you were already using.
-                </p>
-              </article>
-              <article class="feature-card">
-                <h3>Bookmark manager with private states</h3>
-                <p class="card-copy">
-                  The bookmark manager supports reusable review points, tagging,
-                  imported media, and protected bookmarks when certain clips need
-                  more discretion.
-                </p>
-              </article>
-              <article class="feature-card">
-                <h3>Paranoid mode for private bookmarks</h3>
-                <p class="card-copy">
-                  Add a second password after macOS authentication when you want
-                  a stronger separation around sensitive material.
-                </p>
-              </article>
-              <article class="feature-card">
-                <h3>Esc to close and move on</h3>
-                <p class="card-copy">
-                  Press <strong>Esc</strong> to close the current preview window
-                  instantly, which makes rapid compare-and-review sessions feel
-                  faster from clip to clip.
+                  Capture the bookmark, return later to the same clip state, and
+                  keep sensitive material behind the level of protection the
+                  moment deserves.
                 </p>
               </article>
             </div>
@@ -396,18 +265,18 @@
         <section class="section">
           <div class="container">
             <div class="cta-band">
-              <h2 class="display">Want the deeper breakdown?</h2>
+              <h2 class="display">Everything else lives on the Features page.</h2>
               <p>
-                Explore the full feature page for controls, workflow details,
-                and the specific review interactions that make QuickPreview
-                useful day to day.
+                Explore the full product breakdown for playback controls,
+                bookmark workflows, remembered clip settings, and the full
+                privacy model without crowding the landing page.
               </p>
               <div class="button-row">
                 <a class="button button-primary" href="features/"
-                  >View all features</a
+                  >Explore features</a
                 >
                 <a class="button button-secondary" href="support/"
-                  >View support FAQ</a
+                  >Read support FAQ</a
                 >
               </div>
             </div>
@@ -421,13 +290,6 @@
             Copyright <span data-year></span> QuickPreview. Built for fast
             macOS video review.
           </p>
-          <div class="footer-links" aria-label="Footer navigation">
-            <a href="./">Home</a>
-            <a href="features/">Features</a>
-            <a href="pricing/">Pricing</a>
-            <a href="changelog/">Changelog</a>
-            <a href="support/">Support</a>
-          </div>
         </div>
       </footer>
     </div>
