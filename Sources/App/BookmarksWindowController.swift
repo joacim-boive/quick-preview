@@ -109,6 +109,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         _ = notification
+        dismissVisiblePreviewPanels()
         window?.makeFirstResponder(nil)
         onWindowClosed?()
     }
@@ -351,6 +352,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         guard tableView.selectedRow >= 0, tableView.selectedRow < bookmarks.count else {
             return
         }
+        dismissVisiblePreviewPanels()
         onOpenBookmark?(bookmarks[tableView.selectedRow])
     }
 
@@ -489,6 +491,19 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     private func fallbackScopeForLockedSession() -> BookmarkListScope {
         currentVideoURL == nil ? .allVideos : .currentVideo
+    }
+
+    private func dismissVisiblePreviewPanels() {
+        for row in 0..<tableView.numberOfRows {
+            guard let view = tableView.view(
+                atColumn: tableView.column(withIdentifier: ColumnIdentifier.thumbnail),
+                row: row,
+                makeIfNecessary: false
+            ) as? BookmarkThumbnailCellView else {
+                continue
+            }
+            view.dismissPreview()
+        }
     }
 }
 
@@ -698,7 +713,13 @@ private final class BookmarkTableView: NSTableView {
 private final class BookmarkThumbnailCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView(frame: .zero)
     private let previewImageView = NSImageView(frame: .zero)
-    private let previewPopover = NSPopover()
+    private let previewPanel = BookmarkPreviewPanel(
+        contentRect: NSRect(x: 0, y: 0, width: 480, height: 300),
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+    )
+    private let previewContentView = BookmarkPreviewTrackingView(frame: NSRect(x: 0, y: 0, width: 480, height: 300))
     private var bookmarkID: BookmarkID?
     private var currentVideoURL: URL?
     private var currentTimeSeconds: PlaybackSeconds = 0
@@ -706,6 +727,7 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
     private var hoverTrackingArea: NSTrackingArea?
     private var isHovering = false
     private var hasLoadedHighResolutionPreview = false
+    private var closePreviewWorkItem: DispatchWorkItem?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -726,21 +748,21 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         previewImageView.imageScaling = .scaleProportionallyUpOrDown
         previewImageView.imageAlignment = .alignCenter
 
-        let previewContainer = NSViewController()
-        let previewContentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 300))
         previewContentView.wantsLayer = true
         previewContentView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        previewContainer.view = previewContentView
+        previewContentView.layer?.cornerRadius = 12
+        previewContentView.layer?.masksToBounds = true
+        previewContentView.onLayout = { [weak self] bounds in
+            guard let self else { return }
+            self.previewImageView.frame = bounds.insetBy(dx: 12, dy: 12)
+        }
         previewContentView.addSubview(previewImageView)
-        NSLayoutConstraint.activate([
-            previewImageView.leadingAnchor.constraint(equalTo: previewContentView.leadingAnchor, constant: 12),
-            previewImageView.trailingAnchor.constraint(equalTo: previewContentView.trailingAnchor, constant: -12),
-            previewImageView.topAnchor.constraint(equalTo: previewContentView.topAnchor, constant: 12),
-            previewImageView.bottomAnchor.constraint(equalTo: previewContentView.bottomAnchor, constant: -12)
-        ])
-        previewPopover.contentViewController = previewContainer
-        previewPopover.behavior = .semitransient
-        previewPopover.animates = false
+        previewPanel.contentView = previewContentView
+        previewPanel.backgroundColor = .clear
+        previewPanel.isOpaque = false
+        previewPanel.hasShadow = true
+        previewPanel.hidesOnDeactivate = false
+        previewPanel.level = .floating
 
         addSubview(thumbnailImageView)
         NSLayoutConstraint.activate([
@@ -763,7 +785,7 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         }
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -774,13 +796,14 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
     override func mouseEntered(with event: NSEvent) {
         _ = event
         isHovering = true
+        cancelPendingPreviewClose()
         showPreviewIfNeeded()
     }
 
     override func mouseExited(with event: NSEvent) {
         _ = event
         isHovering = false
-        previewPopover.close()
+        schedulePreviewCloseIfNeeded()
     }
 
     func configure(bookmark: Bookmark, thumbnailService: VideoThumbnailService) {
@@ -789,9 +812,11 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         currentTimeSeconds = bookmark.timeSeconds
         self.thumbnailService = thumbnailService
         hasLoadedHighResolutionPreview = false
+        cancelPendingPreviewClose()
+        isHovering = false
         thumbnailImageView.image = Self.placeholderImage
         previewImageView.image = Self.placeholderImage
-        previewPopover.close()
+        previewPanel.orderOut(nil)
         thumbnailService.requestThumbnail(
             for: bookmark.videoURL,
             at: bookmark.timeSeconds,
@@ -808,6 +833,12 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         }
     }
 
+    func dismissPreview() {
+        cancelPendingPreviewClose()
+        isHovering = false
+        previewPanel.orderOut(nil)
+    }
+
     private func showPreviewIfNeeded() {
         guard let image = previewImageView.image else {
             return
@@ -817,26 +848,28 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         guard window != nil else {
             return
         }
-        if previewPopover.isShown {
+        if previewPanel.isVisible {
             return
         }
-        previewPopover.show(relativeTo: thumbnailImageView.bounds, of: thumbnailImageView, preferredEdge: .maxX)
+        positionPreviewPanel(for: previewContentView.frame.size)
+        previewPanel.orderFront(nil)
     }
 
     private func updatePreviewSize(for image: NSImage) {
         let imageSize = image.size
         guard imageSize.width > 0, imageSize.height > 0 else {
-            previewPopover.contentSize = NSSize(width: 480, height: 300)
+            applyPreviewContentSize(NSSize(width: 480, height: 300))
             return
         }
-        let maxContentWidth: CGFloat = 540
-        let maxContentHeight: CGFloat = 360
+        let screenFrame = previewScreenVisibleFrame ?? NSScreen.main?.visibleFrame
+        let maxContentWidth = max(270, floor((screenFrame?.width ?? 1080) * 0.25))
+        let maxContentHeight = max(150, floor((screenFrame?.height ?? 720) * 0.25))
         let widthScale = maxContentWidth / imageSize.width
         let heightScale = maxContentHeight / imageSize.height
-        let scale = min(widthScale, heightScale, 1.8)
+        let scale = min(widthScale, heightScale, 1)
         let contentWidth = max(270, floor(imageSize.width * scale))
         let contentHeight = max(150, floor(imageSize.height * scale))
-        previewPopover.contentSize = NSSize(width: contentWidth + 24, height: contentHeight + 24)
+        applyPreviewContentSize(NSSize(width: contentWidth + 24, height: contentHeight + 24))
     }
 
     private func requestHighResolutionPreviewIfNeeded() {
@@ -852,6 +885,68 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
             self.previewImageView.image = image
             self.updatePreviewSize(for: image)
         }
+    }
+
+    private func schedulePreviewCloseIfNeeded() {
+        cancelPendingPreviewClose()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if !self.isMouseInsidePreviewRegion() {
+                self.previewPanel.orderOut(nil)
+            }
+        }
+        closePreviewWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: workItem)
+    }
+
+    private func cancelPendingPreviewClose() {
+        closePreviewWorkItem?.cancel()
+        closePreviewWorkItem = nil
+    }
+
+    private func isMouseInsidePreviewRegion() -> Bool {
+        let mouseLocation = NSEvent.mouseLocation
+        if let thumbnailFrameOnScreen, thumbnailFrameOnScreen.contains(mouseLocation) {
+            return true
+        }
+        return false
+    }
+
+    private var thumbnailFrameOnScreen: NSRect? {
+        guard let window else {
+            return nil
+        }
+        let frameInWindow = convert(bounds, to: nil)
+        return window.convertToScreen(frameInWindow)
+    }
+
+    private var previewScreenVisibleFrame: NSRect? {
+        window?.screen?.visibleFrame
+            ?? thumbnailImageView.window?.screen?.visibleFrame
+    }
+
+    private func applyPreviewContentSize(_ size: NSSize) {
+        previewContentView.setFrameSize(size)
+        previewImageView.frame = previewContentView.bounds.insetBy(dx: 12, dy: 12)
+        previewContentView.layoutSubtreeIfNeeded()
+        previewPanel.setContentSize(size)
+        if previewPanel.isVisible {
+            positionPreviewPanel(for: size)
+        }
+    }
+
+    private func positionPreviewPanel(for size: NSSize) {
+        guard let thumbnailFrameOnScreen else { return }
+        let screenFrame = previewScreenVisibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let x = min(
+            max(screenFrame.minX, thumbnailFrameOnScreen.maxX + 12),
+            screenFrame.maxX - size.width
+        )
+        let y = min(
+            max(screenFrame.minY, thumbnailFrameOnScreen.midY - (size.height / 2)),
+            screenFrame.maxY - size.height
+        )
+        previewPanel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
     }
 
     private static let placeholderImage: NSImage = {
@@ -870,6 +965,54 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         image.unlockFocus()
         return image
     }()
+}
+
+private final class BookmarkPreviewPanel: NSPanel {
+    override var canBecomeKey: Bool {
+        false
+    }
+
+    override var canBecomeMain: Bool {
+        false
+    }
+}
+
+private final class BookmarkPreviewTrackingView: NSView {
+    var onMouseEntered: (() -> Void)?
+    var onMouseExited: (() -> Void)?
+    var onLayout: ((NSRect) -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+
+    override func layout() {
+        super.layout()
+        onLayout?(bounds)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        _ = event
+        onMouseEntered?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        _ = event
+        onMouseExited?()
+    }
 }
 
 private final class BookmarkTimeCellView: NSTableCellView {
