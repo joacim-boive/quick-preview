@@ -1,10 +1,11 @@
 import Cocoa
+import ServiceManagement
 import StoreKit
 import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let hotkeyManager = GlobalHotkeyManager()
+    private let backgroundShortcutService = BackgroundShortcutService()
     private let bookmarkStore = BookmarkStore()
     private let thumbnailService = VideoThumbnailService()
     private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let rotationMenuItemBaseTag = 4200
     private let protectedMediaMenuItemTag = 4300
     private let paranoidModeMenuItemTag = 4301
+    private let backgroundShortcutMenuItemTag = 4302
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -41,31 +43,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.recoverVisibleWindowIfNeeded()
         }
 
-        // Ctrl+Space can quickly reopen/focus the player window.
-        let hotkeyRegistered = hotkeyManager.registerSpaceHotkey { [weak self] in
-            self?.requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
-                guard let self else { return }
-                let controller = self.ensureWindowController()
-                let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
-                if !openedFinderVideo {
-                    self.revealPlayerWindow(centerIfNeeded: false)
-                }
-            }
-        }
-
-        let shortcutName = hotkeyManager.activeShortcutName
-        shortcutHintText = "Shortcut: \(shortcutName)"
-
-        if !hotkeyRegistered {
-            showStartupAlert(
-                title: "Global Shortcut Not Registered",
-                message: "No global shortcut could be registered. Open videos using the app window for now."
-            )
-        }
-
+        shortcutHintText = BackgroundShortcutConfiguration.windowTitleHint
         startFinderSelectionMonitor()
         requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
             self?.revealPlayerWindow(centerIfNeeded: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.syncBackgroundShortcutServiceAfterLaunch()
         }
     }
 
@@ -279,6 +263,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 ? "Disable Paranoid Mode..."
                 : "Enable Paranoid Mode..."
             return isEntitled && protectedBookmarksSessionController.isUnlocked
+        case backgroundShortcutMenuItemTag:
+            switch backgroundShortcutService.status {
+            case .enabled:
+                menuItem.title = "Disable Background Shortcut"
+            case .requiresApproval:
+                menuItem.title = "Finish Enabling Background Shortcut..."
+            case .notRegistered, .notFound:
+                menuItem.title = "Enable Background Shortcut..."
+            @unknown default:
+                menuItem.title = "Background Shortcut..."
+            }
+            return true
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
@@ -293,15 +289,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func openFromSchemeURL(_ url: URL) {
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-            let host = components.host,
-            host == "open"
+            let host = components.host
         else {
             return
         }
-        let filePath = components.queryItems?.first(where: { $0.name == "file" })?.value
-        guard let filePath else { return }
-        requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
-            self?.ensureWindowController().openVideo(url: URL(fileURLWithPath: filePath))
+
+        switch host {
+        case "open":
+            let filePath = components.queryItems?.first(where: { $0.name == "file" })?.value
+            guard let filePath else { return }
+            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+                self?.ensureWindowController().openVideo(url: URL(fileURLWithPath: filePath))
+            }
+        case "shortcut":
+            performGlobalShortcutAction()
+        default:
+            return
         }
     }
 
@@ -362,6 +365,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         _ = sender
     }
 
+    @objc
+    private func handleBackgroundShortcutMenuItem(_ sender: Any?) {
+        _ = sender
+
+        switch backgroundShortcutService.status {
+        case .enabled:
+            disableBackgroundShortcut()
+        case .requiresApproval:
+            presentBackgroundShortcutApprovalPrompt(isStartupPrompt: false)
+        case .notRegistered, .notFound:
+            presentBackgroundShortcutEnablePrompt(isStartupPrompt: false)
+        @unknown default:
+            showInfoAlert(
+                title: "Background Shortcut Unavailable",
+                message: "QuickPreview could not determine the current background helper state."
+            )
+        }
+    }
+
     private func showBookmarksWindow(selecting bookmark: Bookmark?) {
         let controller = ensureBookmarksWindowController()
         controller.setCurrentVideoURL(windowController?.loadedVideoURL())
@@ -381,6 +403,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let appMenu = NSMenu()
         let appName = ProcessInfo.processInfo.processName
+        let backgroundShortcutItem = NSMenuItem(
+            title: "Enable Background Shortcut...",
+            action: #selector(handleBackgroundShortcutMenuItem(_:)),
+            keyEquivalent: ""
+        )
+        backgroundShortcutItem.target = self
+        backgroundShortcutItem.tag = backgroundShortcutMenuItemTag
+        appMenu.addItem(backgroundShortcutItem)
+        appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit \(appName)",
             action: #selector(NSApplication.terminate(_:)),
@@ -509,6 +540,136 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         helpMenuItem.submenu = helpMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    private func syncBackgroundShortcutServiceAfterLaunch() {
+        do {
+            try backgroundShortcutService.launchHelperIfNeeded()
+        } catch {
+            showStartupAlert(
+                title: "Background Helper Missing",
+                message: error.localizedDescription
+            )
+        }
+
+        guard !backgroundShortcutService.hasShownStartupPrompt else {
+            return
+        }
+
+        switch backgroundShortcutService.status {
+        case .enabled:
+            return
+        case .requiresApproval, .notRegistered, .notFound:
+            backgroundShortcutService.markStartupPromptShown()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self else { return }
+                switch self.backgroundShortcutService.status {
+                case .requiresApproval:
+                    self.presentBackgroundShortcutApprovalPrompt(isStartupPrompt: true)
+                case .notRegistered, .notFound:
+                    self.presentBackgroundShortcutEnablePrompt(isStartupPrompt: true)
+                default:
+                    break
+                }
+            }
+        @unknown default:
+            return
+        }
+    }
+
+    private func performGlobalShortcutAction() {
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            guard let self else { return }
+            let controller = self.ensureWindowController()
+            let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
+            if !openedFinderVideo {
+                self.revealPlayerWindow(centerIfNeeded: false)
+            }
+        }
+    }
+
+    private func presentBackgroundShortcutEnablePrompt(isStartupPrompt: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "Enable Background Shortcut"
+        alert.informativeText = """
+        Allow QuickPreview to keep a tiny helper running in the background so \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space") can relaunch the player even when QuickPreview is closed.
+
+        If macOS reserves Ctrl+Space, QuickPreview automatically falls back to \(BackgroundShortcutConfiguration.fallbackDescription).
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Enable")
+        alert.addButton(withTitle: isStartupPrompt ? "Not Now" : "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            enableBackgroundShortcut()
+        }
+    }
+
+    private func presentBackgroundShortcutApprovalPrompt(isStartupPrompt: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "Approve Background Shortcut"
+        alert.informativeText = """
+        macOS still needs approval for QuickPreview's background helper.
+
+        Open System Settings > General > Login Items and allow QuickPreview to run in the background so the global shortcut keeps working after you close the app.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open Login Items")
+        alert.addButton(withTitle: isStartupPrompt ? "Later" : "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            backgroundShortcutService.openSystemSettings()
+        }
+    }
+
+    private func enableBackgroundShortcut() {
+        do {
+            let status = try backgroundShortcutService.enable()
+            switch status {
+            case .enabled:
+                try backgroundShortcutService.launchHelperIfNeeded()
+                showInfoAlert(
+                    title: "Background Shortcut Enabled",
+                    message: """
+                    QuickPreview can now reopen from the background using \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space").
+
+                    If macOS keeps that shortcut reserved, QuickPreview falls back automatically.
+                    """
+                )
+            case .requiresApproval:
+                presentBackgroundShortcutApprovalPrompt(isStartupPrompt: false)
+            case .notRegistered, .notFound:
+                showInfoAlert(
+                    title: "Background Shortcut Pending",
+                    message: "QuickPreview asked macOS to register the background helper, but the helper is not active yet."
+                )
+            @unknown default:
+                showInfoAlert(
+                    title: "Background Shortcut Unavailable",
+                    message: "QuickPreview could not verify that the background helper was enabled."
+                )
+            }
+        } catch {
+            showInfoAlert(
+                title: "Could Not Enable Background Shortcut",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func disableBackgroundShortcut() {
+        do {
+            try backgroundShortcutService.disable()
+            showInfoAlert(
+                title: "Background Shortcut Disabled",
+                message: "QuickPreview will no longer keep its helper running in the background after you close the app."
+            )
+        } catch {
+            showInfoAlert(
+                title: "Could Not Disable Background Shortcut",
+                message: error.localizedDescription
+            )
+        }
     }
 
     private func startFinderSelectionMonitor() {

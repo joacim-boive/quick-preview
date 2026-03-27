@@ -51,6 +51,7 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeSectionTitle("Getting Started"))
         stack.addArrangedSubview(makeBulletList([
             "Open a video from File > Open..., drag and drop, or use Finder selection.",
+            "Enable QuickPreview > Background Shortcut if you want the global shortcut to work after closing the app.",
             "Click the video or press Space to play/pause.",
             "Use Left/Right arrows for fine seek and Shift + arrows for coarse seek.",
             "Use Up/Down arrows for frame stepping."
@@ -74,6 +75,9 @@ final class HelpWindowController: NSWindowController {
 
         stack.addArrangedSubview(makeSectionTitle("Keyboard Shortcuts"))
         stack.addArrangedSubview(makeShortcutsTable())
+        stack.addArrangedSubview(makeBodyLabel(
+            "The background helper tries Ctrl + Space first. If macOS reserves it for input switching, QuickPreview falls back to Option + Space or Cmd + Shift + Space."
+        ))
 
         if let infographicView = makeInfographicView() {
             stack.addArrangedSubview(makeSectionTitle("Feature Overview"))
@@ -143,6 +147,7 @@ final class HelpWindowController: NSWindowController {
         let rows: [(shortcut: String, action: String)] = [
             ("Cmd + O", "Open video file"),
             ("Cmd + Shift + O", "Open current Finder selection"),
+            ("Ctrl + Space", "Reopen QuickPreview from anywhere when Background Shortcut is enabled"),
             ("Space", "Play / Pause"),
             ("L", "Toggle loop on current clip"),
             ("R", "Rotate clockwise (0° / 90° / 180° / 270°)"),
