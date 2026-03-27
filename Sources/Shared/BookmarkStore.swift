@@ -6,6 +6,7 @@ enum BookmarkListScope: Int, CaseIterable {
     case currentVideo
     case allVideos
     case imported
+    case protected
 }
 
 enum BookmarkSort: Equatable {
@@ -21,6 +22,7 @@ struct Bookmark: Codable, Equatable {
     let createdAt: Date
     let updatedAt: Date
     let tags: [String]
+    let isProtected: Bool
     let isImported: Bool
     let importedAt: Date?
     let fileCreatedAt: Date?
@@ -32,6 +34,7 @@ struct Bookmark: Codable, Equatable {
         case createdAt
         case updatedAt
         case tags
+        case isProtected
         case isImported
         case importedAt
         case fileCreatedAt
@@ -44,6 +47,7 @@ struct Bookmark: Codable, Equatable {
         createdAt: Date,
         updatedAt: Date,
         tags: [String],
+        isProtected: Bool = false,
         isImported: Bool = false,
         importedAt: Date? = nil,
         fileCreatedAt: Date? = nil
@@ -54,6 +58,7 @@ struct Bookmark: Codable, Equatable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.tags = tags
+        self.isProtected = isProtected
         self.isImported = isImported
         self.importedAt = importedAt
         self.fileCreatedAt = fileCreatedAt
@@ -67,6 +72,7 @@ struct Bookmark: Codable, Equatable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         tags = try container.decode([String].self, forKey: .tags)
+        isProtected = try container.decodeIfPresent(Bool.self, forKey: .isProtected) ?? false
         isImported = try container.decodeIfPresent(Bool.self, forKey: .isImported) ?? false
         importedAt = try container.decodeIfPresent(Date.self, forKey: .importedAt)
         fileCreatedAt = try container.decodeIfPresent(Date.self, forKey: .fileCreatedAt)
@@ -88,11 +94,33 @@ struct Bookmark: Codable, Equatable {
             createdAt: createdAt,
             updatedAt: updatedAt,
             tags: tags,
+            isProtected: isProtected,
             isImported: isImported,
             importedAt: importedAt,
             fileCreatedAt: fileCreatedAt
         )
     }
+
+    func withUpdatedProtection(_ isProtected: Bool, updatedAt: Date = Date()) -> Bookmark {
+        Bookmark(
+            id: id,
+            videoPath: videoPath,
+            timeSeconds: timeSeconds,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            tags: tags,
+            isProtected: isProtected,
+            isImported: isImported,
+            importedAt: importedAt,
+            fileCreatedAt: fileCreatedAt
+        )
+    }
+}
+
+enum BookmarkVisibility: Equatable {
+    case publicOnly
+    case all
+    case protectedOnly
 }
 
 extension Notification.Name {
@@ -116,22 +144,23 @@ final class BookmarkStore {
         self.persistDebounceInterval = persistDebounceInterval
     }
 
-    func allBookmarks() -> [Bookmark] {
+    func allBookmarks(visibility: BookmarkVisibility = .all) -> [Bookmark] {
         loadCacheIfNeeded()
-        return cache.sorted(by: bookmarkSortComparator)
+        return filteredBookmarks(cache, visibility: visibility).sorted(by: bookmarkSortComparator)
     }
 
     func bookmarks(
         scope: BookmarkListScope,
         currentVideoURL: URL?,
         searchQuery: String,
-        sort: BookmarkSort = .automatic
+        sort: BookmarkSort = .automatic,
+        visibility: BookmarkVisibility = .publicOnly
     ) -> [Bookmark] {
         loadCacheIfNeeded()
         let normalizedVideoPath = currentVideoURL?.standardizedFileURL.path
         let queryTokens = normalizedSearchTokens(from: searchQuery)
 
-        return cache
+        return filteredBookmarks(cache, visibility: visibility)
             .filter { bookmark in
                 switch scope {
                 case .currentVideo:
@@ -141,6 +170,8 @@ final class BookmarkStore {
                     return true
                 case .imported:
                     return bookmark.isImported
+                case .protected:
+                    return bookmark.isProtected
                 }
             }
             .filter { bookmark in
@@ -225,6 +256,19 @@ final class BookmarkStore {
         notifyDidChange()
     }
 
+    func updateProtection(for id: BookmarkID, isProtected: Bool) {
+        loadCacheIfNeeded()
+        guard let index = cache.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        guard cache[index].isProtected != isProtected else {
+            return
+        }
+        cache[index] = cache[index].withUpdatedProtection(isProtected)
+        schedulePersist()
+        notifyDidChange()
+    }
+
     func removeBookmark(id: BookmarkID) {
         loadCacheIfNeeded()
         let originalCount = cache.count
@@ -271,6 +315,11 @@ final class BookmarkStore {
         )
     }
 
+    func hasProtectedBookmarks() -> Bool {
+        loadCacheIfNeeded()
+        return cache.contains(where: \.isProtected)
+    }
+
     private func loadCacheIfNeeded() {
         guard !hasLoadedCache else { return }
         hasLoadedCache = true
@@ -282,6 +331,17 @@ final class BookmarkStore {
             return
         }
         cache = decoded
+    }
+
+    private func filteredBookmarks(_ bookmarks: [Bookmark], visibility: BookmarkVisibility) -> [Bookmark] {
+        switch visibility {
+        case .publicOnly:
+            return bookmarks.filter { !$0.isProtected }
+        case .all:
+            return bookmarks
+        case .protectedOnly:
+            return bookmarks.filter(\.isProtected)
+        }
     }
 
     private func schedulePersist() {
@@ -345,7 +405,7 @@ final class BookmarkStore {
         switch scope {
         case .imported:
             return dateComparator(\.importedAt, ascending: false)
-        case .currentVideo, .allVideos:
+        case .currentVideo, .allVideos, .protected:
             return bookmarkSortComparator
         }
     }

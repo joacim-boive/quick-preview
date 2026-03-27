@@ -1,0 +1,52 @@
+{
+  "identifier" : "6D4C2F19",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "A1C43F8B",
+      "localizations" : [
+
+      ],
+      "name" : "QuickPreview Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "5E8721AC",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlock QuickPreview with a monthly subscription.",
+              "displayName" : "QuickPreview Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.jboive.quickpreview.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "QuickPreview Monthly",
+          "subscriptionGroupID" : "A1C43F8B",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 2,
+    "minor" : 0
+  }
+}

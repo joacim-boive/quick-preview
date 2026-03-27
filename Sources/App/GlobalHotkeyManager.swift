@@ -3,12 +3,6 @@ import Carbon
 
 typealias HotkeyHandler = () -> Void
 
-struct HotkeyRegistration: Equatable {
-    let keyCode: UInt32
-    let modifiers: UInt32
-    let displayName: String
-}
-
 final class GlobalHotkeyManager {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerRef: EventHandlerRef?
@@ -49,17 +43,7 @@ final class GlobalHotkeyManager {
 
         // Ctrl+Space often conflicts with macOS input source switching.
         // Try multiple simple defaults and use the first that can be registered.
-        let candidates = [
-            HotkeyRegistration(keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey), displayName: "Ctrl+Space"),
-            HotkeyRegistration(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey), displayName: "Option+Space"),
-            HotkeyRegistration(
-                keyCode: UInt32(kVK_Space),
-                modifiers: UInt32(cmdKey | shiftKey),
-                displayName: "Cmd+Shift+Space"
-            )
-        ]
-
-        for candidate in candidates {
+        for candidate in BackgroundShortcutConfiguration.candidates {
             let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: "QPVW".fourCharCodeValue)), id: 1)
             let status = RegisterEventHotKey(
                 candidate.keyCode,

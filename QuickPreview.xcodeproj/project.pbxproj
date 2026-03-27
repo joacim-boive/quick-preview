@@ -26,7 +26,49 @@
 		100001000000000000000018 /* BookmarksWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000B /* BookmarksWindowController.swift */; };
 		100001000000000000000019 /* BookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000C /* BookmarkStore.swift */; };
 		100001000000000000000020 /* VideoThumbnailService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000D /* VideoThumbnailService.swift */; };
+		100001000000000000000021 /* ProtectedBookmarksSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000E /* ProtectedBookmarksSessionController.swift */; };
+		100001000000000000000022 /* SubscriptionAccessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000010000000000000000F /* SubscriptionAccessState.swift */; };
+		100001000000000000000023 /* EntitlementCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000010 /* EntitlementCache.swift */; };
+		100001000000000000000024 /* SubscriptionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000011 /* SubscriptionController.swift */; };
+		100001000000000000000025 /* PaywallWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000012 /* PaywallWindowController.swift */; };
+		100001000000000000000026 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000005 /* StoreKit.framework */; };
+		100001000000000000000027 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000006 /* Security.framework */; };
+		100001000000000000000028 /* BackgroundShortcutService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000013 /* BackgroundShortcutService.swift */; };
+		100001000000000000000029 /* BackgroundShortcutConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000016 /* BackgroundShortcutConfiguration.swift */; };
+		100001000000000000000030 /* LauncherAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000014 /* LauncherAppDelegate.swift */; };
+		100001000000000000000031 /* LauncherMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000015 /* LauncherMain.swift */; };
+		100001000000000000000032 /* BackgroundShortcutConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000016 /* BackgroundShortcutConfiguration.swift */; };
+		100001000000000000000033 /* GlobalHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000003 /* GlobalHotkeyManager.swift */; };
+		100001000000000000000034 /* ServiceManagement.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000007 /* ServiceManagement.framework */; };
+		100001000000000000000035 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000001 /* AppKit.framework */; };
+		100001000000000000000036 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000004 /* Carbon.framework */; };
+		100001000000000000000037 /* ServiceManagement.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000007 /* ServiceManagement.framework */; };
+		100001000000000000000038 /* QuickPreviewLauncher.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = 100000600000000000000002 /* QuickPreviewLauncher.app */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		100000700000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000a00000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 100000900000000000000002;
+			remoteInfo = QuickPreviewLauncher;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		100001600000000000000001 /* Embed Login Items */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "Contents/Library/LoginItems";
+			dstSubfolderSpec = 1;
+			files = (
+				100001000000000000000038 /* QuickPreviewLauncher.app in Embed Login Items */,
+			);
+			name = "Embed Login Items";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		100000100000000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -42,14 +84,28 @@
 		10000010000000000000000B /* BookmarksWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksWindowController.swift; sourceTree = "<group>"; };
 		10000010000000000000000C /* BookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkStore.swift; sourceTree = "<group>"; };
 		10000010000000000000000D /* VideoThumbnailService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoThumbnailService.swift; sourceTree = "<group>"; };
+		10000010000000000000000E /* ProtectedBookmarksSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtectedBookmarksSessionController.swift; sourceTree = "<group>"; };
+		10000010000000000000000F /* SubscriptionAccessState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionAccessState.swift; sourceTree = "<group>"; };
+		100000100000000000000010 /* EntitlementCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementCache.swift; sourceTree = "<group>"; };
+		100000100000000000000011 /* SubscriptionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionController.swift; sourceTree = "<group>"; };
+		100000100000000000000012 /* PaywallWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallWindowController.swift; sourceTree = "<group>"; };
+		100000100000000000000013 /* BackgroundShortcutService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundShortcutService.swift; sourceTree = "<group>"; };
+		100000100000000000000014 /* LauncherAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherAppDelegate.swift; sourceTree = "<group>"; };
+		100000100000000000000015 /* LauncherMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherMain.swift; sourceTree = "<group>"; };
+		100000100000000000000016 /* BackgroundShortcutConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundShortcutConfiguration.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
+		100000100000000000000204 /* Launcher-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Launcher-Info.plist"; sourceTree = "<group>"; };
 		100000300000000000000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000002 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		100000300000000000000004 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
+		100000300000000000000005 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
+		100000300000000000000006 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		100000300000000000000007 /* ServiceManagement.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ServiceManagement.framework; path = System/Library/Frameworks/ServiceManagement.framework; sourceTree = SDKROOT; };
 		100000600000000000000001 /* QuickPreview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickPreview.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		100000600000000000000002 /* QuickPreviewLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickPreviewLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,10 +113,23 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				100001000000000000000034 /* ServiceManagement.framework in Frameworks */,
+				100001000000000000000026 /* StoreKit.framework in Frameworks */,
+				100001000000000000000027 /* Security.framework in Frameworks */,
 				100001000000000000000009 /* AppKit.framework in Frameworks */,
 				100001000000000000000010 /* AVKit.framework in Frameworks */,
 				100001000000000000000011 /* AVFoundation.framework in Frameworks */,
 				100001000000000000000012 /* Carbon.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100000800000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100001000000000000000035 /* AppKit.framework in Frameworks */,
+				100001000000000000000036 /* Carbon.framework in Frameworks */,
+				100001000000000000000037 /* ServiceManagement.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +165,12 @@
 				100000100000000000000004 /* KeyCaptureView.swift */,
 				10000010000000000000000A /* HelpWindowController.swift */,
 				10000010000000000000000B /* BookmarksWindowController.swift */,
+				10000010000000000000000E /* ProtectedBookmarksSessionController.swift */,
+				100000100000000000000011 /* SubscriptionController.swift */,
+				100000100000000000000012 /* PaywallWindowController.swift */,
+				100000100000000000000013 /* BackgroundShortcutService.swift */,
+				100000100000000000000014 /* LauncherAppDelegate.swift */,
+				100000100000000000000015 /* LauncherMain.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -109,6 +184,9 @@
 				100000100000000000000008 /* PreciseSeekController.swift */,
 				10000010000000000000000C /* BookmarkStore.swift */,
 				10000010000000000000000D /* VideoThumbnailService.swift */,
+				10000010000000000000000F /* SubscriptionAccessState.swift */,
+				100000100000000000000010 /* EntitlementCache.swift */,
+				100000100000000000000016 /* BackgroundShortcutConfiguration.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -117,6 +195,7 @@
 			isa = PBXGroup;
 			children = (
 				100000100000000000000201 /* App-Info.plist */,
+				100000100000000000000204 /* Launcher-Info.plist */,
 				100000100000000000000202 /* Assets.xcassets */,
 				100000100000000000000203 /* quickpreview-guide-infographic.png */,
 			);
@@ -130,6 +209,9 @@
 				100000300000000000000002 /* AVKit.framework */,
 				100000300000000000000003 /* AVFoundation.framework */,
 				100000300000000000000004 /* Carbon.framework */,
+				100000300000000000000005 /* StoreKit.framework */,
+				100000300000000000000006 /* Security.framework */,
+				100000300000000000000007 /* ServiceManagement.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -138,6 +220,7 @@
 			isa = PBXGroup;
 			children = (
 				100000600000000000000001 /* QuickPreview.app */,
+				100000600000000000000002 /* QuickPreviewLauncher.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -152,14 +235,33 @@
 				100000800000000000000001 /* Frameworks */,
 				100001200000000000000001 /* Sources */,
 				100001500000000000000001 /* Resources */,
+				100001600000000000000001 /* Embed Login Items */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				100001700000000000000001 /* PBXTargetDependency */,
+			);
+			name = QuickPreview;
+			productName = QuickPreview;
+			productReference = 100000600000000000000001 /* QuickPreview.app */;
+			productType = "com.apple.product-type.application";
+		};
+		100000900000000000000002 /* QuickPreviewLauncher */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100001100000000000000002 /* Build configuration list for PBXNativeTarget "QuickPreviewLauncher" */;
+			buildPhases = (
+				100000800000000000000002 /* Frameworks */,
+				100001200000000000000002 /* Sources */,
+				100001500000000000000002 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = QuickPreview;
-			productName = QuickPreview;
-			productReference = 100000600000000000000001 /* QuickPreview.app */;
+			name = QuickPreviewLauncher;
+			productName = QuickPreviewLauncher;
+			productReference = 100000600000000000000002 /* QuickPreviewLauncher.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -172,6 +274,9 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					100000900000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					100000900000000000000002 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -190,6 +295,7 @@
 			projectRoot = "";
 			targets = (
 				100000900000000000000001 /* QuickPreview */,
+				100000900000000000000002 /* QuickPreviewLauncher */,
 			);
 		};
 /* End PBXProject section */
@@ -201,6 +307,13 @@
 			files = (
 				100001000000000000000015 /* Assets.xcassets in Resources */,
 				100001000000000000000017 /* quickpreview-guide-infographic.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100001500000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -218,16 +331,42 @@
 				100001000000000000000004 /* KeyCaptureView.swift in Sources */,
 				100001000000000000000016 /* HelpWindowController.swift in Sources */,
 				100001000000000000000018 /* BookmarksWindowController.swift in Sources */,
+				100001000000000000000021 /* ProtectedBookmarksSessionController.swift in Sources */,
+				100001000000000000000024 /* SubscriptionController.swift in Sources */,
+				100001000000000000000025 /* PaywallWindowController.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,
 				100001000000000000000008 /* PreciseSeekController.swift in Sources */,
 				100001000000000000000019 /* BookmarkStore.swift in Sources */,
 				100001000000000000000020 /* VideoThumbnailService.swift in Sources */,
+				100001000000000000000022 /* SubscriptionAccessState.swift in Sources */,
+				100001000000000000000023 /* EntitlementCache.swift in Sources */,
+				100001000000000000000028 /* BackgroundShortcutService.swift in Sources */,
+				100001000000000000000029 /* BackgroundShortcutConfiguration.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100001200000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100001000000000000000030 /* LauncherAppDelegate.swift in Sources */,
+				100001000000000000000031 /* LauncherMain.swift in Sources */,
+				100001000000000000000032 /* BackgroundShortcutConfiguration.swift in Sources */,
+				100001000000000000000033 /* GlobalHotkeyManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		100001700000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 100000900000000000000002 /* QuickPreviewLauncher */;
+			targetProxy = 100000700000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		100001300000000000000001 /* Debug */ = {
@@ -260,6 +399,36 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		100001300000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = U34874Z88E;
+				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.launcher;
+				PRODUCT_NAME = QuickPreviewLauncher;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		100001300000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = U34874Z88E;
+				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.launcher;
+				PRODUCT_NAME = QuickPreviewLauncher;
+				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -301,6 +470,15 @@
 			buildConfigurations = (
 				100001300000000000000001 /* Debug */,
 				100001300000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		100001100000000000000002 /* Build configuration list for PBXNativeTarget "QuickPreviewLauncher" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				100001300000000000000003 /* Debug */,
+				100001300000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

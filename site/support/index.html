@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QuickPreview Support | Setup and Troubleshooting</title>
+    <meta
+      name="description"
+      content="QuickPreview support page with getting-started guidance, bookmark and protected-media notes, troubleshooting tips, keyboard shortcuts, and answers to common questions."
+    />
+    <meta name="theme-color" content="#07131c" />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="QuickPreview Support | Setup and Troubleshooting"
+    />
+    <meta
+      property="og:description"
+      content="Support guidance for QuickPreview, including setup notes, bookmark privacy help, control references, and early troubleshooting help."
+    />
+    <meta property="og:image" content="../assets/og-preview.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="QuickPreview Support | Setup and Troubleshooting"
+    />
+    <meta
+      name="twitter:description"
+      content="Getting started, troubleshooting, bookmark manager help, and protected-media answers for QuickPreview."
+    />
+    <meta name="twitter:image" content="../assets/og-preview.svg" />
+    <link rel="icon" href="../assets/brand-icon.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Teko:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+    <script src="../assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="site-shell">
+      <header class="site-header">
+        <div class="container header-inner">
+          <a class="brand" href="../" aria-label="QuickPreview home">
+            <img
+              class="brand-mark"
+              src="../assets/brand-icon.png"
+              alt=""
+              width="48"
+              height="48"
+            />
+            <span class="brand-text">
+              <strong>QuickPreview</strong>
+              <span>Fast video review for macOS</span>
+            </span>
+          </a>
+
+          <button
+            class="nav-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="site-nav"
+            data-nav-toggle
+          >
+            <span class="sr-only">Toggle navigation</span>
+            Menu
+          </button>
+
+          <nav
+            class="site-nav"
+            id="site-nav"
+            aria-label="Primary"
+            data-site-nav
+            data-open="false"
+          >
+            <a href="../">Home</a>
+            <a href="../features/">Features</a>
+            <a href="../pricing/">Pricing</a>
+            <a href="../changelog/">Changelog</a>
+            <a class="is-active" href="./">Support</a>
+          </nav>
+        </div>
+      </header>
+
+      <main id="main">
+        <section class="section section-spacious">
+          <div class="container">
+            <div class="section-heading">
+              <p class="eyebrow">FAQ</p>
+              <h2 class="display">Short answers.</h2>
+            </div>
+
+            <div class="faq-list">
+              <article class="faq-card">
+                <h3>What video formats are supported?</h3>
+                <p>
+                  QuickPreview supports the same video formats that native macOS
+                  preview support handles by default. If a file is not supported
+                  there, install an additional codec/plugin package and it
+                  should work in both places.
+                </p>
+                <p>
+                  Recommended resources:
+                  <a href="https://support.apple.com/en-us/106396"
+                    >Apple Pro Video Formats</a
+                  >
+                  and
+                  <a href="https://github.com/Marginal/QuickLookVideo"
+                    >QuickLookVideo plugin project</a
+                  >.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>Does QuickPreview replace a full editor?</h3>
+                <p>
+                  No. The product is positioned as a fast review and looping
+                  tool, not a full editing timeline or media management suite.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>Can it focus on one specific moment repeatedly?</h3>
+                <p>
+                  Yes. The product flow includes full-loop playback as well as
+                  start and end markers for replaying a selected segment.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>Can I manage saved review points in one place?</h3>
+                <p>
+                  Yes. QuickPreview includes a bookmark manager for reopening
+                  saved moments, working across clips, and separating protected
+                  bookmarks from standard ones when needed.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>Why does a bookmark stop opening the right clip?</h3>
+                <p>
+                  Bookmarks reference the original file path. If the source
+                  media is moved, renamed, or removed, that bookmark reference
+                  will no longer match and needs to be updated.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>What if I lose my paranoid mode password?</h3>
+                <p>
+                  The paranoid mode password cannot be recovered. To start over,
+                  reset the app state by reinstalling and setting the app up
+                  again. Your original media files remain intact.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>How does QuickPreview handle my media files?</h3>
+                <p>
+                  QuickPreview does not move or duplicate your media. It stores
+                  references to file paths for playback and bookmarks. If a file
+                  is moved, renamed, or deleted, related bookmarks need to be
+                  updated to match the new location.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>Do bookmarks and settings sync across Macs?</h3>
+                <p>
+                  Not automatically in this version. Bookmarks and clip state
+                  are stored locally on each Mac, so use your normal machine
+                  backup workflow if you want recovery or migration coverage.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>What happens when protected media is locked again?</h3>
+                <p>
+                  Protected bookmarks are hidden until you unlock again. If
+                  paranoid mode is enabled, unlocking requires macOS
+                  authentication plus the paranoid password step.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>What is the fastest codec troubleshooting flow?</h3>
+                <p>
+                  First test the file in native macOS preview support. If it
+                  fails there, install codec support, then reopen QuickPreview
+                  and test again.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="section-heading">
+              <p class="eyebrow">Privacy FAQ</p>
+              <h2 class="display">Private by default.</h2>
+              <p class="section-copy">
+                QuickPreview is designed as a lightweight local app. It does not
+                collect personal user profiles, upload your media, or build a
+                cloud account around your usage.
+              </p>
+            </div>
+
+            <div class="faq-list">
+              <article class="faq-card">
+                <h3>Does QuickPreview store information about me?</h3>
+                <p>
+                  QuickPreview does not collect or store personal information
+                  about its users on our side. There is no user account, no
+                  cloud profile, and no media upload pipeline built into the
+                  app.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>What does the app store locally on my Mac?</h3>
+                <p>
+                  To make the app useful, QuickPreview stores local app data
+                  such as bookmarks, clip state, and protected-bookmark settings
+                  on your own Mac. That information stays on your device unless
+                  you back it up or sync your machine using your own system
+                  tools.
+                </p>
+              </article>
+              <article class="faq-card">
+                <h3>Do you upload my videos or bookmark data anywhere?</h3>
+                <p>
+                  No. QuickPreview works with local file references and local
+                  app state. Your videos are not uploaded by the app, and your
+                  bookmark data is not sent to us.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="cta-band">
+              <h2 class="display">Need support anyway?</h2>
+              <p>
+                Most users should need minimal support, but if you hit a blocker
+                with setup or protected media access, send us an email and we
+                will help you quickly.
+              </p>
+              <div class="button-row">
+                <a
+                  class="button button-primary"
+                  href="mailto:support@yourdomain.com"
+                  >Email support</a
+                >
+                <a class="button button-secondary" href="../features/"
+                  >Back to features</a
+                >
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <div class="container footer-inner">
+          <p class="footer-copy">
+            Copyright <span data-year></span> QuickPreview. Built for fast macOS
+            video review.
+          </p>
+          <div class="footer-links" aria-label="Footer navigation">
+            <a href="../">Home</a>
+            <a href="../features/">Features</a>
+            <a href="../pricing/">Pricing</a>
+            <a href="../changelog/">Changelog</a>
+            <a href="./">Support</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

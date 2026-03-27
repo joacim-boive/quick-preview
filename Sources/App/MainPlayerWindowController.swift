@@ -8,6 +8,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let playerView = PlayerSurfaceView(frame: .zero)
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let addBookmarkButton = NSButton(title: "", target: nil, action: nil)
+    private let loopToggleButton = NSButton(title: "", target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let maxVolumeGain: Double = 3.0 // 300%
     private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 3.0, target: nil, action: nil)
@@ -109,9 +110,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    func revealWindow() {
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+    }
+
     func openVideo(url: URL, shouldRevealWindow: Bool = true) {
         if shouldRevealWindow {
-            showWindow(nil)
+            revealWindow()
         } else {
             window?.orderFront(nil)
         }
@@ -211,6 +218,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     func setLoopEnabled(_ enabled: Bool) {
         isLoopEnabled = enabled
         applyLoopPreferenceForCurrentClip()
+        updateLoopToggleButtonAppearance()
         persistCurrentClipPlaybackStateIfNeeded()
     }
 
@@ -355,6 +363,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func presentOpenVideoPanel() {
+        revealWindow()
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie]
         panel.canChooseFiles = true
@@ -453,6 +462,17 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         addBookmarkButton.setContentHuggingPriority(.required, for: .horizontal)
         addBookmarkButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        loopToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        loopToggleButton.target = self
+        loopToggleButton.action = #selector(handleLoopToggle(_:))
+        loopToggleButton.bezelStyle = .texturedRounded
+        loopToggleButton.imagePosition = .imageOnly
+        loopToggleButton.controlSize = .regular
+        loopToggleButton.setButtonType(.momentaryPushIn)
+        loopToggleButton.setContentHuggingPriority(.required, for: .horizontal)
+        loopToggleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        updateLoopToggleButtonAppearance()
+
         volumePercentLabel.translatesAutoresizingMaskIntoConstraints = false
         volumePercentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         volumePercentLabel.alignment = .right
@@ -491,7 +511,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         inlineTimelineView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         inlineTimelineView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let controlsRow = NSStackView(views: [inlineTimelineView, addBookmarkButton, volumeControls, timeControls])
+        let controlsRow = NSStackView(views: [inlineTimelineView, addBookmarkButton, loopToggleButton, volumeControls, timeControls])
         controlsRow.orientation = .horizontal
         controlsRow.alignment = .centerY
         controlsRow.distribution = .fill
@@ -560,6 +580,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             case .range:
                 self.isLoopEnabled = true
             }
+            self.updateLoopToggleButtonAppearance()
         }
     }
 
@@ -641,6 +662,14 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.setAudioGain(Float(sender.doubleValue))
         updateVolumePercentLabel(for: sender.doubleValue)
         persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    @objc
+    private func handleLoopToggle(_ sender: Any?) {
+        _ = sender
+        guard engine.currentPlayer().currentItem != nil else { return }
+        toggleSelectedLoop()
+        playerView.flashStatusMessage(isLoopEnabled ? "Loop On" : "Loop Off")
     }
 
     @objc
@@ -806,6 +835,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             self.pendingRestoredLoopEnabled = nil
             isLoopEnabled = pendingRestoredLoopEnabled
             applyLoopPreferenceForCurrentClip()
+            updateLoopToggleButtonAppearance()
         }
 
         if let pendingRestoredIsPlaying {
@@ -1002,6 +1032,17 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private func updateControlState(hasVideo: Bool) {
         inlineTimelineView.isControlEnabled = hasVideo
         addBookmarkButton.isEnabled = hasVideo
+        loopToggleButton.isEnabled = hasVideo
+    }
+
+    private func updateLoopToggleButtonAppearance() {
+        let symbolName = isLoopEnabled ? "repeat.circle.fill" : "repeat.circle"
+        loopToggleButton.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: isLoopEnabled ? "Loop On" : "Loop Off"
+        )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        loopToggleButton.contentTintColor = isLoopEnabled ? .labelColor : .tertiaryLabelColor
+        loopToggleButton.toolTip = isLoopEnabled ? "Loop On — click to turn off" : "Loop Off — click to turn on"
     }
 
     private func applyLoopPreferenceForCurrentClip() {

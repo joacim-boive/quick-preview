@@ -1,14 +1,25 @@
 import Cocoa
+import ServiceManagement
+import StoreKit
 import UniformTypeIdentifiers
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let hotkeyManager = GlobalHotkeyManager()
+    private let backgroundShortcutService = BackgroundShortcutService()
     private let bookmarkStore = BookmarkStore()
     private let thumbnailService = VideoThumbnailService()
+    private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
+    private let subscriptionController = SubscriptionController()
     private var windowController: MainPlayerWindowController?
     private var helpWindowController: HelpWindowController?
     private var bookmarksWindowController: BookmarksWindowController?
+    private var paywallWindowController: PaywallWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
+    private var accessRefreshTask: Task<Void, Never>?
+    private var pendingPostEntitlementAction: (() -> Void)?
+    private var shortcutHintText: String?
+    private var didCenterMainWindowOnFirstPresentation = false
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
     private let finderSelectionMonitorQueue = DispatchQueue(
         label: "quickpreview.finder-selection-monitor",
         qos: .utility
@@ -18,68 +29,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var ignoredFinderSelectedVideoURL: URL?
     private let loopMenuItemTag = 4101
     private let rotationMenuItemBaseTag = 4200
+    private let protectedMediaMenuItemTag = 4300
+    private let paranoidModeMenuItemTag = 4301
+    private let backgroundShortcutMenuItemTag = 4302
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         buildMainMenu()
-        let controller = ensureWindowController()
-        controller.showWindow(nil)
-        controller.window?.center()
-        controller.window?.makeKeyAndOrderFront(nil)
-        controller.window?.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        configureSubscriptionController()
+        subscriptionController.start()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self else { return }
-            if !NSApp.windows.contains(where: { $0.isVisible }) {
-                let controller = self.ensureWindowController()
-                controller.showWindow(nil)
-                controller.window?.center()
-                controller.window?.makeKeyAndOrderFront(nil)
-                controller.window?.orderFrontRegardless()
-                NSApp.activate(ignoringOtherApps: true)
-            }
+            self?.recoverVisibleWindowIfNeeded()
         }
 
-        // Ctrl+Space can quickly reopen/focus the player window.
-        let hotkeyRegistered = hotkeyManager.registerSpaceHotkey { [weak self] in
-            guard let self else { return }
-            let controller = self.ensureWindowController()
-            let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
-            if !openedFinderVideo {
-                controller.showWindow(nil)
-                controller.window?.makeKeyAndOrderFront(nil)
-            }
-            controller.window?.orderFrontRegardless()
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        let shortcutName = hotkeyManager.activeShortcutName
-        ensureWindowController().setShortcutHint("Shortcut: \(shortcutName)")
-
-        if !hotkeyRegistered {
-            showStartupAlert(
-                title: "Global Shortcut Not Registered",
-                message: "No global shortcut could be registered. Open videos using the app window for now."
-            )
-        }
-
+        shortcutHintText = BackgroundShortcutConfiguration.windowTitleHint
         startFinderSelectionMonitor()
+        requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+            self?.revealPlayerWindow(centerIfNeeded: true)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.syncBackgroundShortcutServiceAfterLaunch()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        accessRefreshTask?.cancel()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
         finderSelectionMonitorTimer?.cancel()
         finderSelectionMonitorTimer = nil
+        if let appDidBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            let controller = ensureWindowController()
-            controller.showWindow(nil)
-            controller.window?.makeKeyAndOrderFront(nil)
-            controller.window?.orderFrontRegardless()
+            if let paywallWindowController, paywallWindowController.window?.isVisible == true {
+                paywallWindowController.showWindow(nil)
+                paywallWindowController.window?.makeKeyAndOrderFront(nil)
+            } else {
+                requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+                    self?.revealPlayerWindow(centerIfNeeded: false)
+                }
+            }
         }
         return true
     }
@@ -91,20 +85,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
         if first.isFileURL {
-            ensureWindowController().openVideo(url: first)
+            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+                self?.ensureWindowController().openVideo(url: first)
+            }
         }
     }
 
     @objc
     private func handleOpenFromMenu(_ sender: Any?) {
-        ensureWindowController().presentOpenVideoPanel()
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            self?.ensureWindowController().presentOpenVideoPanel()
+        }
         _ = sender
     }
 
     @objc
     private func handleOpenFinderSelectionFromMenu(_ sender: Any?) {
-        let controller = ensureWindowController()
-        _ = controller.openFinderSelectionIfVideo(showErrors: true)
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            guard let self else { return }
+            let controller = self.ensureWindowController()
+            _ = controller.openFinderSelectionIfVideo(showErrors: true)
+        }
         _ = sender
     }
 
@@ -123,22 +124,163 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc
     private func handleShowBookmarks(_ sender: Any?) {
-        showBookmarksWindow(selecting: nil)
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            self?.showBookmarksWindow(selecting: nil)
+        }
         _ = sender
     }
 
+    @objc
+    private func handleProtectedMediaSession(_ sender: Any?) {
+        _ = sender
+        if protectedBookmarksSessionController.isUnlocked {
+            protectedBookmarksSessionController.lock()
+            return
+        }
+
+        unlockProtectedMediaSession()
+    }
+
+    @objc
+    private func handleParanoidMode(_ sender: Any?) {
+        _ = sender
+
+        guard protectedBookmarksSessionController.isUnlocked else {
+            showInfoAlert(
+                title: "Protected Media Locked",
+                message: "Unlock protected media first to change paranoid mode."
+            )
+            return
+        }
+
+        if protectedBookmarksSessionController.isParanoidModeEnabled {
+            disableParanoidMode()
+        } else {
+            enableParanoidMode()
+        }
+    }
+
+    private func unlockProtectedMediaSession() {
+        let controller = ensureBookmarksWindowController()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        if protectedBookmarksSessionController.isParanoidModeEnabled,
+           protectedBookmarksSessionController.isAwaitingParanoidPassword {
+            guard let password = promptForParanoidPassword(
+                title: "Enter Paranoid Mode Password",
+                message: "Enter your paranoid mode password to reveal protected bookmarks.",
+                actionTitle: "Unlock"
+            ) else {
+                return
+            }
+
+            guard protectedBookmarksSessionController.unlockWithParanoidPassword(password) else {
+                return
+            }
+
+            showBookmarksWindow(selecting: nil)
+            return
+        }
+
+        protectedBookmarksSessionController.authenticateWithDeviceOwner(
+            reason: "Unlock protected bookmarks in QuickPreview."
+        ) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                if self.protectedBookmarksSessionController.isParanoidModeEnabled {
+                    self.protectedBookmarksSessionController.beginParanoidPasswordStep()
+                } else {
+                    self.protectedBookmarksSessionController.unlock()
+                    self.showBookmarksWindow(selecting: nil)
+                }
+            case .cancelled:
+                break
+            case .unavailable:
+                self.showInfoAlert(
+                    title: "Authentication Unavailable",
+                    message: "QuickPreview could not use macOS authentication to unlock protected bookmarks."
+                )
+            case .failed:
+                self.showInfoAlert(
+                    title: "Authentication Failed",
+                    message: "QuickPreview could not unlock protected bookmarks."
+                )
+            }
+        }
+    }
+
+    private func enableParanoidMode() {
+        guard let password = promptForNewParanoidModePassword() else {
+            return
+        }
+
+        protectedBookmarksSessionController.enableParanoidMode(password: password)
+        showInfoAlert(
+            title: "Paranoid Mode Enabled",
+            message: "Protected media now requires macOS authentication and your paranoid mode password to unlock. If you forget this password, it cannot be recovered."
+        )
+    }
+
+    private func disableParanoidMode() {
+        guard let password = promptForParanoidPassword(
+            title: "Disable Paranoid Mode",
+            message: "Enter the paranoid mode password to disable this setting.",
+            actionTitle: "Disable"
+        ) else {
+            return
+        }
+
+        guard protectedBookmarksSessionController.disableParanoidMode(password: password) else {
+            showInfoAlert(
+                title: "Incorrect Password",
+                message: "The paranoid mode password you entered was incorrect."
+            )
+            return
+        }
+
+        showInfoAlert(
+            title: "Paranoid Mode Disabled",
+            message: "Protected media will now unlock with macOS authentication only."
+        )
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        let controller = ensureWindowController()
+        let isEntitled = subscriptionController.accessState.isEntitled
+        let controller = windowController
         switch menuItem.tag {
         case loopMenuItemTag:
-            menuItem.state = controller.loopEnabled() ? .on : .off
-            return controller.hasLoadedVideo()
+            menuItem.state = controller?.loopEnabled() == true ? .on : .off
+            return isEntitled && controller?.hasLoadedVideo() == true
+        case protectedMediaMenuItemTag:
+            let isUnlocked = protectedBookmarksSessionController.isUnlocked
+            menuItem.title = isUnlocked ? "Lock Protected Media" : "Unlock Protected Media..."
+            return isEntitled
+        case paranoidModeMenuItemTag:
+            menuItem.title = protectedBookmarksSessionController.isParanoidModeEnabled
+                ? "Disable Paranoid Mode..."
+                : "Enable Paranoid Mode..."
+            return isEntitled && protectedBookmarksSessionController.isUnlocked
+        case backgroundShortcutMenuItemTag:
+            switch backgroundShortcutService.status {
+            case .enabled:
+                menuItem.title = "Disable Background Shortcut"
+            case .requiresApproval:
+                menuItem.title = "Finish Enabling Background Shortcut..."
+            case .notRegistered, .notFound:
+                menuItem.title = "Enable Background Shortcut..."
+            @unknown default:
+                menuItem.title = "Background Shortcut..."
+            }
+            return true
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
                 let rotationDegrees = menuItem.tag - rotationMenuItemBaseTag
-                menuItem.state = rotationDegrees == controller.rotationDegrees() ? .on : .off
-                return controller.hasLoadedVideo()
+                menuItem.state = rotationDegrees == controller?.rotationDegrees() ? .on : .off
+                return isEntitled && controller?.hasLoadedVideo() == true
             }
             return true
         }
@@ -147,14 +289,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func openFromSchemeURL(_ url: URL) {
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-            let host = components.host,
-            host == "open"
+            let host = components.host
         else {
             return
         }
-        let filePath = components.queryItems?.first(where: { $0.name == "file" })?.value
-        guard let filePath else { return }
-        ensureWindowController().openVideo(url: URL(fileURLWithPath: filePath))
+
+        switch host {
+        case "open":
+            let filePath = components.queryItems?.first(where: { $0.name == "file" })?.value
+            guard let filePath else { return }
+            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+                self?.ensureWindowController().openVideo(url: URL(fileURLWithPath: filePath))
+            }
+        case "shortcut":
+            performGlobalShortcutAction()
+        default:
+            return
+        }
     }
 
     private func ensureWindowController() -> MainPlayerWindowController {
@@ -162,6 +313,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return windowController
         }
         let controller = MainPlayerWindowController(bookmarkStore: bookmarkStore)
+        if let shortcutHintText {
+            controller.setShortcutHint(shortcutHintText)
+        }
         controller.onShowBookmarksRequested = { [weak self] bookmark in
             self?.showBookmarksWindow(selecting: bookmark)
         }
@@ -187,11 +341,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let controller = BookmarksWindowController(
             bookmarkStore: bookmarkStore,
-            thumbnailService: thumbnailService
+            thumbnailService: thumbnailService,
+            protectedBookmarksSessionController: protectedBookmarksSessionController
         )
         controller.onOpenBookmark = { [weak self] bookmark in
             self?.ignoreCurrentFinderSelection()
             self?.ensureWindowController().openBookmark(bookmark)
+        }
+        controller.onWindowClosed = { [weak self] in
+            self?.protectedBookmarksSessionController.lock()
         }
         controller.setCurrentVideoURL(windowController?.loadedVideoURL())
         bookmarksWindowController = controller
@@ -207,9 +365,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         _ = sender
     }
 
+    @objc
+    private func handleBackgroundShortcutMenuItem(_ sender: Any?) {
+        _ = sender
+
+        switch backgroundShortcutService.status {
+        case .enabled:
+            disableBackgroundShortcut()
+        case .requiresApproval:
+            presentBackgroundShortcutApprovalPrompt(isStartupPrompt: false)
+        case .notRegistered, .notFound:
+            presentBackgroundShortcutEnablePrompt(isStartupPrompt: false)
+        @unknown default:
+            showInfoAlert(
+                title: "Background Shortcut Unavailable",
+                message: "QuickPreview could not determine the current background helper state."
+            )
+        }
+    }
+
     private func showBookmarksWindow(selecting bookmark: Bookmark?) {
         let controller = ensureBookmarksWindowController()
-        controller.setCurrentVideoURL(ensureWindowController().loadedVideoURL())
+        controller.setCurrentVideoURL(windowController?.loadedVideoURL())
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -226,6 +403,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let appMenu = NSMenu()
         let appName = ProcessInfo.processInfo.processName
+        let backgroundShortcutItem = NSMenuItem(
+            title: "Enable Background Shortcut...",
+            action: #selector(handleBackgroundShortcutMenuItem(_:)),
+            keyEquivalent: ""
+        )
+        backgroundShortcutItem.target = self
+        backgroundShortcutItem.tag = backgroundShortcutMenuItemTag
+        appMenu.addItem(backgroundShortcutItem)
+        appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit \(appName)",
             action: #selector(NSApplication.terminate(_:)),
@@ -254,6 +440,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(openFinderSelectionItem)
         fileMenuItem.submenu = fileMenu
+
+        let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        mainMenu.addItem(editMenuItem)
+
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(
+            withTitle: "Cut",
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        )
+        editMenu.addItem(
+            withTitle: "Copy",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        )
+        editMenu.addItem(
+            withTitle: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        editMenu.addItem(.separator())
+        editMenu.addItem(
+            withTitle: "Select All",
+            action: #selector(NSResponder.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        editMenuItem.submenu = editMenu
 
         let playbackMenuItem = NSMenuItem(title: "Playback", action: nil, keyEquivalent: "")
         mainMenu.addItem(playbackMenuItem)
@@ -292,6 +505,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         bookmarksItem.target = self
         bookmarksItem.keyEquivalentModifierMask = [.command]
         playbackMenu.addItem(bookmarksItem)
+
+        let protectedMediaItem = NSMenuItem(
+            title: "Unlock Protected Media...",
+            action: #selector(handleProtectedMediaSession(_:)),
+            keyEquivalent: ""
+        )
+        protectedMediaItem.target = self
+        protectedMediaItem.tag = protectedMediaMenuItemTag
+        playbackMenu.addItem(protectedMediaItem)
+
+        let paranoidModeItem = NSMenuItem(
+            title: "Enable Paranoid Mode...",
+            action: #selector(handleParanoidMode(_:)),
+            keyEquivalent: ""
+        )
+        paranoidModeItem.target = self
+        paranoidModeItem.tag = paranoidModeMenuItemTag
+        playbackMenu.addItem(paranoidModeItem)
         playbackMenuItem.submenu = playbackMenu
 
         let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
@@ -309,6 +540,136 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         helpMenuItem.submenu = helpMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    private func syncBackgroundShortcutServiceAfterLaunch() {
+        do {
+            try backgroundShortcutService.launchHelperIfNeeded()
+        } catch {
+            showStartupAlert(
+                title: "Background Helper Missing",
+                message: error.localizedDescription
+            )
+        }
+
+        guard !backgroundShortcutService.hasShownStartupPrompt else {
+            return
+        }
+
+        switch backgroundShortcutService.status {
+        case .enabled:
+            return
+        case .requiresApproval, .notRegistered, .notFound:
+            backgroundShortcutService.markStartupPromptShown()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self else { return }
+                switch self.backgroundShortcutService.status {
+                case .requiresApproval:
+                    self.presentBackgroundShortcutApprovalPrompt(isStartupPrompt: true)
+                case .notRegistered, .notFound:
+                    self.presentBackgroundShortcutEnablePrompt(isStartupPrompt: true)
+                default:
+                    break
+                }
+            }
+        @unknown default:
+            return
+        }
+    }
+
+    private func performGlobalShortcutAction() {
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            guard let self else { return }
+            let controller = self.ensureWindowController()
+            let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
+            if !openedFinderVideo {
+                self.revealPlayerWindow(centerIfNeeded: false)
+            }
+        }
+    }
+
+    private func presentBackgroundShortcutEnablePrompt(isStartupPrompt: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "Enable Background Shortcut"
+        alert.informativeText = """
+        Allow QuickPreview to keep a tiny helper running in the background so \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space") can relaunch the player even when QuickPreview is closed.
+
+        If macOS reserves Ctrl+Space, QuickPreview automatically falls back to \(BackgroundShortcutConfiguration.fallbackDescription).
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Enable")
+        alert.addButton(withTitle: isStartupPrompt ? "Not Now" : "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            enableBackgroundShortcut()
+        }
+    }
+
+    private func presentBackgroundShortcutApprovalPrompt(isStartupPrompt: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "Approve Background Shortcut"
+        alert.informativeText = """
+        macOS still needs approval for QuickPreview's background helper.
+
+        Open System Settings > General > Login Items and allow QuickPreview to run in the background so the global shortcut keeps working after you close the app.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open Login Items")
+        alert.addButton(withTitle: isStartupPrompt ? "Later" : "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            backgroundShortcutService.openSystemSettings()
+        }
+    }
+
+    private func enableBackgroundShortcut() {
+        do {
+            let status = try backgroundShortcutService.enable()
+            switch status {
+            case .enabled:
+                try backgroundShortcutService.launchHelperIfNeeded()
+                showInfoAlert(
+                    title: "Background Shortcut Enabled",
+                    message: """
+                    QuickPreview can now reopen from the background using \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space").
+
+                    If macOS keeps that shortcut reserved, QuickPreview falls back automatically.
+                    """
+                )
+            case .requiresApproval:
+                presentBackgroundShortcutApprovalPrompt(isStartupPrompt: false)
+            case .notRegistered, .notFound:
+                showInfoAlert(
+                    title: "Background Shortcut Pending",
+                    message: "QuickPreview asked macOS to register the background helper, but the helper is not active yet."
+                )
+            @unknown default:
+                showInfoAlert(
+                    title: "Background Shortcut Unavailable",
+                    message: "QuickPreview could not verify that the background helper was enabled."
+                )
+            }
+        } catch {
+            showInfoAlert(
+                title: "Could Not Enable Background Shortcut",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func disableBackgroundShortcut() {
+        do {
+            try backgroundShortcutService.disable()
+            showInfoAlert(
+                title: "Background Shortcut Disabled",
+                message: "QuickPreview will no longer keep its helper running in the background after you close the app."
+            )
+        } catch {
+            showInfoAlert(
+                title: "Could Not Disable Background Shortcut",
+                message: error.localizedDescription
+            )
+        }
     }
 
     private func startFinderSelectionMonitor() {
@@ -368,6 +729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         DispatchQueue.main.async { [weak self] in
             guard
                 let self,
+                self.subscriptionController.accessState.isEntitled,
                 let controller = self.windowController,
                 controller.hasLoadedVideo(),
                 selectedVideoURL != controller.loadedVideoURL()
@@ -391,6 +753,350 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+    }
+
+    private func showInfoAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func promptForNewParanoidModePassword() -> String? {
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        let confirmField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        passwordField.placeholderString = "Password"
+        confirmField.placeholderString = "Confirm password"
+
+        let warningLabel = NSTextField(wrappingLabelWithString: "Warning: if you forget this password, QuickPreview cannot recover it.")
+        warningLabel.textColor = .systemRed
+        warningLabel.maximumNumberOfLines = 0
+
+        let stack = NSStackView(views: [
+            NSTextField(labelWithString: "Set a paranoid mode password."),
+            passwordField,
+            confirmField,
+            warningLabel
+        ])
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 132))
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        let alert = NSAlert()
+        alert.messageText = "Enable Paranoid Mode"
+        alert.informativeText = "Paranoid mode adds a password after macOS authentication every time you unlock protected media."
+        alert.alertStyle = .warning
+        alert.accessoryView = container
+        alert.addButton(withTitle: "Enable")
+        alert.addButton(withTitle: "Cancel")
+
+        while true {
+            let response = alert.runModal()
+            guard response == .alertFirstButtonReturn else {
+                return nil
+            }
+
+            let password = passwordField.stringValue
+            let confirmedPassword = confirmField.stringValue
+
+            guard !password.isEmpty else {
+                showInfoAlert(title: "Password Required", message: "Enter a password to enable paranoid mode.")
+                continue
+            }
+
+            guard password == confirmedPassword else {
+                showInfoAlert(title: "Passwords Do Not Match", message: "Enter the same password in both fields.")
+                continue
+            }
+
+            return password
+        }
+    }
+
+    private func promptForParanoidPassword(
+        title: String,
+        message: String,
+        actionTitle: String
+    ) -> String? {
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        passwordField.placeholderString = "Password"
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.accessoryView = passwordField
+        alert.addButton(withTitle: actionTitle)
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else {
+            return nil
+        }
+
+        let password = passwordField.stringValue
+        guard !password.isEmpty else {
+            showInfoAlert(title: "Password Required", message: "Enter the paranoid mode password to continue.")
+            return nil
+        }
+
+        return password
+    }
+
+    private func configureSubscriptionController() {
+        subscriptionController.onAccessStateChange = { [weak self] state in
+            self?.handleSubscriptionAccessStateChange(state)
+        }
+
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAccessStateInBackground()
+            }
+        }
+    }
+
+    private func refreshAccessStateInBackground() {
+        accessRefreshTask?.cancel()
+        accessRefreshTask = Task { [weak self] in
+            _ = await self?.subscriptionController.refreshEntitlements()
+        }
+    }
+
+    private func requestSubscriptionAccess(
+        showLoadingWindow: Bool,
+        action: @escaping () -> Void
+    ) {
+        pendingPostEntitlementAction = action
+
+        if subscriptionController.accessState.isEntitled {
+            let pendingAction = pendingPostEntitlementAction
+            pendingPostEntitlementAction = nil
+            pendingAction?()
+            refreshAccessStateInBackground()
+            return
+        }
+
+        if showLoadingWindow || subscriptionController.accessState == .unknown || subscriptionController.accessState == .verifying {
+            presentLoadingWindow()
+        }
+
+        refreshAccessStateInBackground()
+    }
+
+    private func handleSubscriptionAccessStateChange(_ state: SubscriptionAccessState) {
+        switch state {
+        case .unknown, .verifying:
+            presentLoadingWindow()
+        case .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            dismissPaywallWindowIfNeeded()
+            let pendingAction = pendingPostEntitlementAction
+            pendingPostEntitlementAction = nil
+            if let pendingAction {
+                pendingAction()
+            } else if !isMainWindowVisible {
+                revealPlayerWindow(centerIfNeeded: false)
+            }
+        case .expired, .revoked, .refunded, .notEntitled:
+            hideEntitledWindows()
+            presentBlockedPaywall(for: state)
+        }
+    }
+
+    private func presentLoadingWindow() {
+        let controller = ensurePaywallWindowController()
+        controller.apply(mode: .loading, isBusy: false)
+        controller.showWindow(nil)
+        controller.window?.center()
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func presentBlockedPaywall(for state: SubscriptionAccessState) {
+        let controller = ensurePaywallWindowController()
+        controller.apply(
+            mode: .blocked(state, makePaywallProductDetails()),
+            isBusy: false
+        )
+        controller.showWindow(nil)
+        controller.window?.center()
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func ensurePaywallWindowController() -> PaywallWindowController {
+        if let paywallWindowController {
+            return paywallWindowController
+        }
+
+        let controller = PaywallWindowController()
+        controller.onSubscribe = { [weak self] in
+            self?.startPurchaseFlow()
+        }
+        controller.onRestorePurchases = { [weak self] in
+            self?.startRestoreFlow()
+        }
+        controller.onManageSubscription = { [weak self] in
+            self?.subscriptionController.openManageSubscriptions()
+        }
+        controller.onShowHelp = { [weak self] in
+            self?.handleShowGuide(nil)
+        }
+        controller.onQuit = {
+            NSApp.terminate(nil)
+        }
+        paywallWindowController = controller
+        return controller
+    }
+
+    private func makePaywallProductDetails() -> PaywallProductDetails? {
+        guard let product = subscriptionController.subscriptionProduct else {
+            return nil
+        }
+
+        return PaywallProductDetails(
+            displayName: product.displayName,
+            displayPrice: product.displayPrice
+        )
+    }
+
+    private func startPurchaseFlow() {
+        let controller = ensurePaywallWindowController()
+        controller.apply(
+            mode: .blocked(subscriptionController.accessState, makePaywallProductDetails()),
+            isBusy: true
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.subscriptionController.purchaseSubscription()
+            switch result {
+            case .success:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+            case .pending:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(
+                    title: "Purchase Pending",
+                    message: "The App Store purchase is pending approval."
+                )
+            case .cancelled:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+            case .failed(let message):
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(title: "Purchase Failed", message: message)
+            }
+        }
+    }
+
+    private func startRestoreFlow() {
+        let controller = ensurePaywallWindowController()
+        controller.apply(
+            mode: .blocked(subscriptionController.accessState, makePaywallProductDetails()),
+            isBusy: true
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.subscriptionController.restorePurchases()
+            switch result {
+            case .restored:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+            case .noEntitlement:
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(
+                    title: "Nothing to Restore",
+                    message: "QuickPreview could not find an active subscription to restore for this Apple account."
+                )
+            case .failed(let message):
+                controller.apply(
+                    mode: .blocked(self.subscriptionController.accessState, self.makePaywallProductDetails()),
+                    isBusy: false
+                )
+                self.showInfoAlert(title: "Restore Failed", message: message)
+            }
+        }
+    }
+
+    private func dismissPaywallWindowIfNeeded() {
+        paywallWindowController?.close()
+    }
+
+    private func revealPlayerWindow(centerIfNeeded: Bool) {
+        let controller = ensureWindowController()
+        controller.showWindow(nil)
+        if centerIfNeeded && !didCenterMainWindowOnFirstPresentation {
+            controller.window?.center()
+            didCenterMainWindowOnFirstPresentation = true
+        }
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.window?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private var isMainWindowVisible: Bool {
+        windowController?.window?.isVisible == true
+    }
+
+    private func hideEntitledWindows() {
+        windowController?.window?.orderOut(nil)
+        bookmarksWindowController?.close()
+        protectedBookmarksSessionController.lock()
+    }
+
+    private func recoverVisibleWindowIfNeeded() {
+        if NSApp.windows.contains(where: { $0.isVisible }) {
+            return
+        }
+
+        switch subscriptionController.accessState {
+        case .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            revealPlayerWindow(centerIfNeeded: false)
+        case .expired, .revoked, .refunded, .notEntitled:
+            presentBlockedPaywall(for: subscriptionController.accessState)
+        case .unknown, .verifying:
+            presentLoadingWindow()
+            refreshAccessStateInBackground()
         }
     }
 }
