@@ -4,6 +4,12 @@ import AVFoundation
 final class VideoThumbnailService {
     private let cache = NSCache<NSString, NSImage>()
     private let queue = DispatchQueue(label: "quickpreview.video-thumbnail-service", qos: .userInitiated)
+    private let stateQueue = DispatchQueue(label: "quickpreview.video-thumbnail-service.state")
+    private var inFlightRequests: [NSString: [(NSImage?) -> Void]] = [:]
+
+    init() {
+        cache.countLimit = 600
+    }
 
     func requestThumbnail(
         for videoURL: URL,
@@ -18,24 +24,41 @@ final class VideoThumbnailService {
         }
 
         let normalizedURL = videoURL.standardizedFileURL
-        queue.async { [weak self] in
+        let nsCacheKey = cacheKey as NSString
+        stateQueue.async { [weak self] in
             guard let self else { return }
-            let generatedImage = self.generateThumbnail(
-                for: normalizedURL,
-                at: max(timeSeconds, 0),
-                maximumSize: maximumSize
-            )
-            if let generatedImage {
-                self.cache.setObject(generatedImage, forKey: cacheKey as NSString)
+            if self.inFlightRequests[nsCacheKey] != nil {
+                self.inFlightRequests[nsCacheKey]?.append(completion)
+                return
             }
-            DispatchQueue.main.async {
-                completion(generatedImage)
+            self.inFlightRequests[nsCacheKey] = [completion]
+
+            self.queue.async { [weak self] in
+                guard let self else { return }
+                let generatedImage = self.generateThumbnail(
+                    for: normalizedURL,
+                    at: max(timeSeconds, 0),
+                    maximumSize: maximumSize
+                )
+                if let generatedImage {
+                    self.cache.setObject(generatedImage, forKey: nsCacheKey)
+                }
+                self.stateQueue.async { [weak self] in
+                    guard let self else { return }
+                    let completions = self.inFlightRequests.removeValue(forKey: nsCacheKey) ?? []
+                    DispatchQueue.main.async {
+                        completions.forEach { $0(generatedImage) }
+                    }
+                }
             }
         }
     }
 
     func purgeCache() {
         cache.removeAllObjects()
+        stateQueue.async { [weak self] in
+            self?.inFlightRequests.removeAll()
+        }
     }
 
     private func generateThumbnail(
@@ -49,8 +72,11 @@ final class VideoThumbnailService {
         if let maximumSize {
             imageGenerator.maximumSize = maximumSize
         }
-        imageGenerator.requestedTimeToleranceBefore = .zero
-        imageGenerator.requestedTimeToleranceAfter = .zero
+        let tolerance = maximumSize == nil
+            ? CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+            : CMTime(seconds: 0.12, preferredTimescale: 600)
+        imageGenerator.requestedTimeToleranceBefore = tolerance
+        imageGenerator.requestedTimeToleranceAfter = tolerance
 
         let requestedTime = CMTime(seconds: timeSeconds, preferredTimescale: 600)
         guard let cgImage = try? imageGenerator.copyCGImage(at: requestedTime, actualTime: nil) else {

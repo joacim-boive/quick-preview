@@ -83,7 +83,7 @@ struct Bookmark: Codable, Equatable {
     }
 
     var videoDisplayName: String {
-        videoURL.lastPathComponent
+        (videoPath as NSString).lastPathComponent
     }
 
     func withUpdatedTags(_ tags: [String], updatedAt: Date = Date()) -> Bookmark {
@@ -130,9 +130,18 @@ extension Notification.Name {
 final class BookmarkStore {
     private static let defaultsKey = "bookmarks"
 
+    private struct PreparedBookmark {
+        let searchableTokens: [String]
+    }
+
     private let persistDebounceInterval: TimeInterval
     private let defaults: UserDefaults
+    private let persistenceQueue = DispatchQueue(
+        label: "quickpreview.bookmark-store.persistence",
+        qos: .utility
+    )
     private var cache: [Bookmark] = []
+    private var preparedBookmarks: [BookmarkID: PreparedBookmark] = [:]
     private var hasLoadedCache = false
     private var persistWorkItem: DispatchWorkItem?
 
@@ -159,32 +168,23 @@ final class BookmarkStore {
         loadCacheIfNeeded()
         let normalizedVideoPath = currentVideoURL?.standardizedFileURL.path
         let queryTokens = normalizedSearchTokens(from: searchQuery)
+        var results: [Bookmark] = []
+        results.reserveCapacity(cache.count)
 
-        return filteredBookmarks(cache, visibility: visibility)
-            .filter { bookmark in
-                switch scope {
-                case .currentVideo:
-                    guard let normalizedVideoPath else { return false }
-                    return bookmark.videoPath == normalizedVideoPath
-                case .allVideos:
-                    return true
-                case .imported:
-                    return bookmark.isImported
-                case .protected:
-                    return bookmark.isProtected
-                }
+        for bookmark in cache {
+            guard matchesVisibility(bookmark, visibility: visibility) else {
+                continue
             }
-            .filter { bookmark in
-                guard !queryTokens.isEmpty else { return true }
-                let haystack = normalizedSearchTokens(
-                    from: ([bookmark.videoDisplayName, BookmarkStore.formattedTimestamp(bookmark.timeSeconds)] + bookmark.tags)
-                        .joined(separator: " ")
-                )
-                return queryTokens.allSatisfy { token in
-                    haystack.contains(where: { $0.contains(token) })
-                }
+            guard matchesScope(bookmark, scope: scope, normalizedVideoPath: normalizedVideoPath) else {
+                continue
             }
-            .sorted(by: sortComparator(for: sort, scope: scope))
+            guard matchesQuery(bookmark, queryTokens: queryTokens) else {
+                continue
+            }
+            results.append(bookmark)
+        }
+
+        return results.sorted(by: sortComparator(for: sort, scope: scope))
     }
 
     @discardableResult
@@ -205,6 +205,7 @@ final class BookmarkStore {
             fileCreatedAt: Self.fileCreationDate(for: normalizedURL)
         )
         cache.append(bookmark)
+        preparedBookmarks[bookmark.id] = makePreparedBookmark(for: bookmark)
         schedulePersist()
         notifyDidChange()
         return bookmark
@@ -232,6 +233,9 @@ final class BookmarkStore {
             return []
         }
         cache.append(contentsOf: bookmarks)
+        for bookmark in bookmarks {
+            preparedBookmarks[bookmark.id] = makePreparedBookmark(for: bookmark)
+        }
         schedulePersist()
         notifyDidChange()
         return bookmarks
@@ -252,6 +256,7 @@ final class BookmarkStore {
             return
         }
         cache[index] = cache[index].withUpdatedTags(sanitizedTags)
+        preparedBookmarks[id] = makePreparedBookmark(for: cache[index])
         schedulePersist()
         notifyDidChange()
     }
@@ -276,6 +281,7 @@ final class BookmarkStore {
         guard cache.count != originalCount else {
             return
         }
+        preparedBookmarks.removeValue(forKey: id)
         schedulePersist()
         notifyDidChange()
     }
@@ -283,8 +289,9 @@ final class BookmarkStore {
     func flushPendingWrites() {
         guard let persistWorkItem else { return }
         persistWorkItem.cancel()
-        if let data = try? JSONEncoder().encode(cache) {
-            defaults.set(data, forKey: Self.defaultsKey)
+        let snapshot = cache
+        persistenceQueue.sync {
+            persistSnapshot(snapshot)
         }
         self.persistWorkItem = nil
     }
@@ -328,9 +335,11 @@ final class BookmarkStore {
             let decoded = try? JSONDecoder().decode([Bookmark].self, from: data)
         else {
             cache = []
+            preparedBookmarks = [:]
             return
         }
         cache = decoded
+        rebuildPreparedBookmarks()
     }
 
     private func filteredBookmarks(_ bookmarks: [Bookmark], visibility: BookmarkVisibility) -> [Bookmark] {
@@ -346,12 +355,13 @@ final class BookmarkStore {
 
     private func schedulePersist() {
         persistWorkItem?.cancel()
+        let snapshot = cache
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if let data = try? JSONEncoder().encode(self.cache) {
-                self.defaults.set(data, forKey: Self.defaultsKey)
-            }
             self.persistWorkItem = nil
+            self.persistenceQueue.async { [weak self] in
+                self?.persistSnapshot(snapshot)
+            }
         }
         persistWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
@@ -378,6 +388,73 @@ final class BookmarkStore {
             guard !seen.contains(normalizedTag) else { return }
             seen.insert(normalizedTag)
             result.append(tag)
+        }
+    }
+
+    private func rebuildPreparedBookmarks() {
+        preparedBookmarks = cache.reduce(into: [:]) { result, bookmark in
+            result[bookmark.id] = makePreparedBookmark(for: bookmark)
+        }
+    }
+
+    private func makePreparedBookmark(for bookmark: Bookmark) -> PreparedBookmark {
+        let displayName = (bookmark.videoPath as NSString).lastPathComponent
+        let searchableTokens = normalizedSearchTokens(
+            from: ([displayName, Self.formattedTimestamp(bookmark.timeSeconds)] + bookmark.tags)
+                .joined(separator: " ")
+        )
+        return PreparedBookmark(searchableTokens: searchableTokens)
+    }
+
+    private func matchesVisibility(_ bookmark: Bookmark, visibility: BookmarkVisibility) -> Bool {
+        switch visibility {
+        case .publicOnly:
+            return !bookmark.isProtected
+        case .all:
+            return true
+        case .protectedOnly:
+            return bookmark.isProtected
+        }
+    }
+
+    private func matchesScope(
+        _ bookmark: Bookmark,
+        scope: BookmarkListScope,
+        normalizedVideoPath: String?
+    ) -> Bool {
+        switch scope {
+        case .currentVideo:
+            guard let normalizedVideoPath else { return false }
+            return bookmark.videoPath == normalizedVideoPath
+        case .allVideos:
+            return true
+        case .imported:
+            return bookmark.isImported
+        case .protected:
+            return bookmark.isProtected
+        }
+    }
+
+    private func matchesQuery(_ bookmark: Bookmark, queryTokens: [String]) -> Bool {
+        guard !queryTokens.isEmpty else {
+            return true
+        }
+        let preparedBookmark: PreparedBookmark
+        if let cached = preparedBookmarks[bookmark.id] {
+            preparedBookmark = cached
+        } else {
+            let prepared = makePreparedBookmark(for: bookmark)
+            preparedBookmarks[bookmark.id] = prepared
+            preparedBookmark = prepared
+        }
+        return queryTokens.allSatisfy { token in
+            preparedBookmark.searchableTokens.contains(where: { $0.contains(token) })
+        }
+    }
+
+    private func persistSnapshot(_ snapshot: [Bookmark]) {
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: Self.defaultsKey)
         }
     }
 
