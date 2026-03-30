@@ -58,6 +58,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     var onShowBookmarksRequested: ((Bookmark?) -> Void)?
     var onCurrentVideoURLChange: ((URL?) -> Void)?
+    var onBookmarkNavigationRequested: ((Int) -> Void)?
 
     private struct ClipSelection: Codable {
         let start: PlaybackSeconds
@@ -217,6 +218,26 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func flushPersistedStateWrites() {
         flushPendingPersistedStateWrites(blocking: true)
+    }
+
+    func closeCurrentVideoIfNeeded() {
+        guard currentVideoURL != nil else {
+            return
+        }
+        persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
+        engine.pause()
+        engine.currentPlayer().replaceCurrentItem(with: nil)
+        clearLoadedVideoState()
+    }
+
+    func closeCurrentProtectedVideoIfNeeded() {
+        guard
+            let currentProtectedVideoURL = currentVideoURL,
+            bookmarkStore.hasProtectedBookmarks(for: currentProtectedVideoURL)
+        else {
+            return
+        }
+        closeCurrentVideoIfNeeded()
     }
 
     func loopEnabled() -> Bool {
@@ -604,11 +625,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         case 53:
             closePreviewWindow()
         case 49:
-            guard engine.currentPlayer().currentItem != nil else { return }
-            let wasPlaying = engine.currentPlayer().rate != 0
-            engine.handle(command: .togglePlayPause)
-            let symbolName = wasPlaying ? "pause.fill" : "play.fill"
-            playerView.flashPlaybackIndicator(symbolName: symbolName)
+            togglePlayPauseIfPossible()
         case 37:
             toggleSelectedLoop()
             playerView.flashStatusMessage(isLoopEnabled ? "Loop On" : "Loop Off")
@@ -622,12 +639,28 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             let amount = isShift ? engine.coarseStepAmount() : engine.fineStepAmount()
             engine.handle(command: .seekBy(seconds: amount))
         case 126:
-            engine.handle(command: .seekFrame(delta: 1))
+            if isShift {
+                engine.handle(command: .seekFrame(delta: 1))
+            } else {
+                onBookmarkNavigationRequested?(-1)
+            }
         case 125:
-            engine.handle(command: .seekFrame(delta: -1))
+            if isShift {
+                engine.handle(command: .seekFrame(delta: -1))
+            } else {
+                onBookmarkNavigationRequested?(1)
+            }
         default:
             break
         }
+    }
+
+    func togglePlayPauseIfPossible() {
+        guard engine.currentPlayer().currentItem != nil else { return }
+        let wasPlaying = engine.currentPlayer().rate != 0
+        engine.handle(command: .togglePlayPause)
+        let symbolName = wasPlaying ? "pause.fill" : "play.fill"
+        playerView.flashPlaybackIndicator(symbolName: symbolName)
     }
 
     private func installEscCloseMonitor() {
@@ -653,6 +686,27 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         engine.pause()
         window?.orderOut(nil)
+    }
+
+    private func clearLoadedVideoState() {
+        currentVideoURL = nil
+        lastKnownDuration = 0
+        lastRenderedPositionWholeSeconds = -1
+        lastRenderedDurationWholeSeconds = -1
+        lastTimelineUpdateUptime = 0
+        pendingRestoredPlayhead = nil
+        pendingRestoredLoopEnabled = nil
+        pendingRestoredIsPlaying = nil
+        pendingBookmarkNavigationTime = nil
+        hasStoredSelectionForCurrentClip = false
+        selectionStart = 0
+        selectionEnd = 0
+        timeLabel.stringValue = "00:00 / 00:00"
+        emptyStateLabel.isHidden = false
+        updateWindowTitle()
+        synchronizeSelectionState(for: 0)
+        updateControlState(hasVideo: false)
+        onCurrentVideoURLChange?(nil)
     }
 
     private func handleInlineSelectionChange(start: PlaybackSeconds, end: PlaybackSeconds, shouldCommit: Bool) {
@@ -693,11 +747,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func handlePlayerSurfaceClick() {
-        guard engine.currentPlayer().currentItem != nil else { return }
-        let wasPlaying = engine.currentPlayer().rate != 0
-        engine.handle(command: .togglePlayPause)
-        let symbolName = wasPlaying ? "pause.fill" : "play.fill"
-        playerView.flashPlaybackIndicator(symbolName: symbolName)
+        togglePlayPauseIfPossible()
     }
 
     private func isVideoURL(_ url: URL) -> Bool {
@@ -1714,6 +1764,7 @@ private final class PlayerSurfaceView: NSView {
         wantsLayer = true
         let rootLayer = CALayer()
         rootLayer.backgroundColor = NSColor.black.cgColor
+        rootLayer.masksToBounds = true
         layer = rootLayer
         playerLayer.videoGravity = .resizeAspect
         rootLayer.addSublayer(playerLayer)

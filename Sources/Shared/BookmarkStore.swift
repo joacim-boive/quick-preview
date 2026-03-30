@@ -275,13 +275,22 @@ final class BookmarkStore {
     }
 
     func removeBookmark(id: BookmarkID) {
+        removeBookmarks(ids: Set([id]))
+    }
+
+    func removeBookmarks(ids: Set<BookmarkID>) {
         loadCacheIfNeeded()
+        guard !ids.isEmpty else {
+            return
+        }
         let originalCount = cache.count
-        cache.removeAll { $0.id == id }
+        cache.removeAll { ids.contains($0.id) }
         guard cache.count != originalCount else {
             return
         }
-        preparedBookmarks.removeValue(forKey: id)
+        for id in ids {
+            preparedBookmarks.removeValue(forKey: id)
+        }
         schedulePersist()
         notifyDidChange()
     }
@@ -325,6 +334,14 @@ final class BookmarkStore {
     func hasProtectedBookmarks() -> Bool {
         loadCacheIfNeeded()
         return cache.contains(where: \.isProtected)
+    }
+
+    func hasProtectedBookmarks(for videoURL: URL) -> Bool {
+        loadCacheIfNeeded()
+        let normalizedVideoPath = videoURL.standardizedFileURL.path
+        return cache.contains { bookmark in
+            bookmark.isProtected && bookmark.videoPath == normalizedVideoPath
+        }
     }
 
     private func loadCacheIfNeeded() {

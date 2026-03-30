@@ -3,7 +3,7 @@
 macOS standalone video player focused on fast preview and loop workflows:
 
 - Full-file loop toggle
-- Precise seek controls (fine/coarse and frame-step)
+- Precise seek controls (fine/coarse and Shift+arrow frame-step)
 - High-resolution scrubber
 - Standalone player app
 
@@ -16,11 +16,12 @@ macOS standalone video player focused on fast preview and loop workflows:
 
 ## Controls
 
-- `Space`: Play/pause
+- `Space`: Play/pause for the current clip, including from the bookmark manager unless a text field is being edited
 - `L`: Toggle full-video looping
 - `Left/Right`: Fine seek (`0.1s`)
 - `Shift+Left/Shift+Right`: Coarse seek (`1.0s`)
-- `Up/Down`: Frame step (+/- one frame, with fine-step fallback)
+- `Up/Down`: Move through bookmarks while the bookmark manager is open
+- `Shift+Up/Down`: Frame step (+/- one frame, with fine-step fallback)
 - `Set Start` / `Set End`: Mark replay selection points
 - `Replay Selection`: Loop only the marked segment
 - `Clear Selection`: Remove current replay segment

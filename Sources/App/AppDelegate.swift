@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var shortcutHintText: String?
     private var didCenterMainWindowOnFirstPresentation = false
     private var appDidBecomeActiveObserver: NSObjectProtocol?
+    private var protectedBookmarksSessionObserver: NSObjectProtocol?
     private let finderSelectionMonitorQueue = DispatchQueue(
         label: "quickpreview.finder-selection-monitor",
         qos: .utility
@@ -38,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.setActivationPolicy(.regular)
         buildMainMenu()
         configureSubscriptionController()
+        configureProtectedBookmarksSessionObserver()
         subscriptionController.start()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.recoverVisibleWindowIfNeeded()
@@ -61,6 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         finderSelectionMonitorTimer = nil
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+        }
+        if let protectedBookmarksSessionObserver {
+            NotificationCenter.default.removeObserver(protectedBookmarksSessionObserver)
         }
     }
 
@@ -322,6 +327,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.onCurrentVideoURLChange = { [weak self] videoURL in
             self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
         }
+        controller.onBookmarkNavigationRequested = { [weak self] delta in
+            self?.bookmarksWindowController?.navigateSelection(delta: delta)
+        }
         windowController = controller
         return controller
     }
@@ -347,6 +355,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.onOpenBookmark = { [weak self] bookmark in
             self?.ignoreCurrentFinderSelection()
             self?.ensureWindowController().openBookmark(bookmark)
+        }
+        controller.onEscapeKey = { [weak self] in
+            self?.windowController?.closeCurrentVideoIfNeeded()
+        }
+        controller.onPlayPauseRequested = { [weak self] in
+            self?.windowController?.togglePlayPauseIfPossible()
         }
         controller.onWindowClosed = { [weak self] in
             self?.protectedBookmarksSessionController.lock()
@@ -868,6 +882,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             Task { @MainActor [weak self] in
                 self?.refreshAccessStateInBackground()
             }
+        }
+    }
+
+    private func configureProtectedBookmarksSessionObserver() {
+        protectedBookmarksSessionObserver = NotificationCenter.default.addObserver(
+            forName: .protectedBookmarksSessionDidChange,
+            object: protectedBookmarksSessionController,
+            queue: .main
+        ) { [weak self] _ in
+            guard
+                let self,
+                !self.protectedBookmarksSessionController.isUnlocked
+            else {
+                return
+            }
+
+            self.windowController?.closeCurrentProtectedVideoIfNeeded()
         }
     }
 

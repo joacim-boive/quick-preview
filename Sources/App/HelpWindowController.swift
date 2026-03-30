@@ -52,9 +52,11 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeBulletList([
             "Open a video from File > Open..., drag and drop, or use Finder selection.",
             "Enable QuickPreview > Background Shortcut if you want the global shortcut to work after closing the app.",
-            "Click the video or press Space to play/pause.",
+            "Click the video or press Space to play/pause, even while the bookmark manager is focused.",
+            "When you are editing the bookmark search or tags fields, Space stays in that text field instead.",
             "Use Left/Right arrows for fine seek and Shift + arrows for coarse seek.",
-            "Use Up/Down arrows for frame stepping."
+            "Use Up/Down arrows to move through bookmarks when the bookmark manager is open.",
+            "Use Shift + Up/Down arrows for frame stepping."
         ]))
 
         stack.addArrangedSubview(makeSectionTitle("Precision Timeline & Looping"))
@@ -148,15 +150,16 @@ final class HelpWindowController: NSWindowController {
             ("Cmd + O", "Open video file"),
             ("Cmd + Shift + O", "Open current Finder selection"),
             ("Ctrl + Space", "Reopen QuickPreview from anywhere when Background Shortcut is enabled"),
-            ("Space", "Play / Pause"),
+            ("Space", "Play / Pause, including from the bookmark manager unless a text field is being edited"),
             ("L", "Toggle loop on current clip"),
             ("R", "Rotate clockwise (0° / 90° / 180° / 270°)"),
             ("Left Arrow", "Seek backward (fine)"),
             ("Right Arrow", "Seek forward (fine)"),
             ("Shift + Left Arrow", "Seek backward (coarse)"),
             ("Shift + Right Arrow", "Seek forward (coarse)"),
-            ("Down Arrow", "Step one frame backward"),
-            ("Up Arrow", "Step one frame forward"),
+            ("Up / Down Arrow", "Move through bookmarks when the bookmark manager is open"),
+            ("Shift + Down Arrow", "Step one frame backward"),
+            ("Shift + Up Arrow", "Step one frame forward"),
             ("Esc", "Close preview window"),
             ("Cmd + Q", "Quit app")
         ]
