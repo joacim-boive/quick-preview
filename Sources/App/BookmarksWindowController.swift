@@ -34,6 +34,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private var currentScope: BookmarkListScope = .currentVideo
     private var currentSort: BookmarkSort = .automatic
     private var suppressBookmarkOpenOnSelectionChange = false
+    private weak var activePreviewThumbnailCell: BookmarkThumbnailCellView?
 
     private static let importedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -167,6 +168,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tableView.onDeleteKey = { [weak self] in
             self?.removeSelectedBookmark()
         }
+        tableView.onScrollWheel = { [weak self] in
+            self?.refreshHoveredThumbnailPreview()
+        }
 
         let thumbnailColumn = NSTableColumn(identifier: ColumnIdentifier.thumbnail)
         thumbnailColumn.title = "Bookmark"
@@ -290,6 +294,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func reloadBookmarks(selecting bookmarkID: BookmarkID? = nil) {
+        dismissVisiblePreviewPanels()
         refreshScopeControl()
         let selectedBookmarkID: BookmarkID? = {
             guard tableView.selectedRow >= 0, tableView.selectedRow < bookmarks.count else {
@@ -494,6 +499,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func dismissVisiblePreviewPanels() {
+        activePreviewThumbnailCell = nil
         for row in 0..<tableView.numberOfRows {
             guard let view = tableView.view(
                 atColumn: tableView.column(withIdentifier: ColumnIdentifier.thumbnail),
@@ -504,6 +510,50 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             }
             view.dismissPreview()
         }
+    }
+
+    private func refreshHoveredThumbnailPreview() {
+        guard let window else {
+            dismissVisiblePreviewPanels()
+            return
+        }
+
+        let mouseLocationInTable = tableView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let thumbnailColumn = tableView.column(withIdentifier: ColumnIdentifier.thumbnail)
+        let hoveredRow = tableView.row(at: mouseLocationInTable)
+        let hoveredColumn = tableView.column(at: mouseLocationInTable)
+
+        guard hoveredRow >= 0,
+              hoveredColumn == thumbnailColumn,
+              let hoveredCell = tableView.view(
+                atColumn: thumbnailColumn,
+                row: hoveredRow,
+                makeIfNecessary: false
+              ) as? BookmarkThumbnailCellView,
+              hoveredCell.isMouseInsideThumbnailOnScreen() else {
+            dismissVisiblePreviewPanels()
+            return
+        }
+
+        if activePreviewThumbnailCell !== hoveredCell {
+            activePreviewThumbnailCell?.dismissPreview()
+        }
+        hoveredCell.refreshPreviewForCurrentHover()
+    }
+
+    private func previewWillOpen(from cell: BookmarkThumbnailCellView) {
+        guard activePreviewThumbnailCell !== cell else {
+            return
+        }
+        activePreviewThumbnailCell?.dismissPreview()
+        activePreviewThumbnailCell = cell
+    }
+
+    private func previewDidClose(from cell: BookmarkThumbnailCellView) {
+        guard activePreviewThumbnailCell === cell else {
+            return
+        }
+        activePreviewThumbnailCell = nil
     }
 }
 
@@ -599,10 +649,22 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
     private func reusableThumbnailCell(in tableView: NSTableView) -> BookmarkThumbnailCellView {
         let identifier = NSUserInterfaceItemIdentifier("BookmarkThumbnailCellView")
         if let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? BookmarkThumbnailCellView {
+            cell.onPreviewWillOpen = { [weak self] previewCell in
+                self?.previewWillOpen(from: previewCell)
+            }
+            cell.onPreviewDidClose = { [weak self] previewCell in
+                self?.previewDidClose(from: previewCell)
+            }
             return cell
         }
         let cell = BookmarkThumbnailCellView(frame: .zero)
         cell.identifier = identifier
+        cell.onPreviewWillOpen = { [weak self] previewCell in
+            self?.previewWillOpen(from: previewCell)
+        }
+        cell.onPreviewDidClose = { [weak self] previewCell in
+            self?.previewDidClose(from: previewCell)
+        }
         return cell
     }
 
@@ -689,6 +751,7 @@ extension BookmarksWindowController: NSSearchFieldDelegate, NSTextFieldDelegate 
 private final class BookmarkTableView: NSTableView {
     var onReturnKey: (() -> Void)?
     var onDeleteKey: (() -> Void)?
+    var onScrollWheel: (() -> Void)?
     private(set) var mouseDownColumn: Int = -1
 
     override func mouseDown(with event: NSEvent) {
@@ -708,9 +771,17 @@ private final class BookmarkTableView: NSTableView {
             super.keyDown(with: event)
         }
     }
+
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        onScrollWheel?()
+    }
 }
 
 private final class BookmarkThumbnailCellView: NSTableCellView {
+    var onPreviewWillOpen: ((BookmarkThumbnailCellView) -> Void)?
+    var onPreviewDidClose: ((BookmarkThumbnailCellView) -> Void)?
+
     private let thumbnailImageView = NSImageView(frame: .zero)
     private let previewImageView = NSImageView(frame: .zero)
     private let previewPanel = BookmarkPreviewPanel(
@@ -727,7 +798,6 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
     private var hoverTrackingArea: NSTrackingArea?
     private var isHovering = false
     private var hasLoadedHighResolutionPreview = false
-    private var closePreviewWorkItem: DispatchWorkItem?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -778,6 +848,13 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         nil
     }
 
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if superview == nil {
+            dismissPreview()
+        }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTrackingArea {
@@ -796,14 +873,16 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
     override func mouseEntered(with event: NSEvent) {
         _ = event
         isHovering = true
-        cancelPendingPreviewClose()
         showPreviewIfNeeded()
     }
 
     override func mouseExited(with event: NSEvent) {
         _ = event
+        guard !isMouseInsideThumbnailOnScreen() else {
+            return
+        }
         isHovering = false
-        schedulePreviewCloseIfNeeded()
+        dismissPreview()
     }
 
     func configure(bookmark: Bookmark, thumbnailService: VideoThumbnailService) {
@@ -812,7 +891,6 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         currentTimeSeconds = bookmark.timeSeconds
         self.thumbnailService = thumbnailService
         hasLoadedHighResolutionPreview = false
-        cancelPendingPreviewClose()
         isHovering = false
         thumbnailImageView.image = Self.placeholderImage
         previewImageView.image = Self.placeholderImage
@@ -834,9 +912,23 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
     }
 
     func dismissPreview() {
-        cancelPendingPreviewClose()
         isHovering = false
+        if previewPanel.isVisible {
+            previewPanel.orderOut(nil)
+            onPreviewDidClose?(self)
+            return
+        }
         previewPanel.orderOut(nil)
+    }
+
+    func refreshPreviewForCurrentHover() {
+        let isPointerInsideThumbnail = isMouseInsideThumbnailOnScreen()
+        isHovering = isPointerInsideThumbnail
+        if isPointerInsideThumbnail {
+            showPreviewIfNeeded()
+        } else {
+            dismissPreview()
+        }
     }
 
     private func showPreviewIfNeeded() {
@@ -848,7 +940,9 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         guard window != nil else {
             return
         }
+        onPreviewWillOpen?(self)
         if previewPanel.isVisible {
+            positionPreviewPanel(for: previewContentView.frame.size)
             return
         }
         positionPreviewPanel(for: previewContentView.frame.size)
@@ -887,37 +981,19 @@ private final class BookmarkThumbnailCellView: NSTableCellView {
         }
     }
 
-    private func schedulePreviewCloseIfNeeded() {
-        cancelPendingPreviewClose()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            if !self.isMouseInsidePreviewRegion() {
-                self.previewPanel.orderOut(nil)
-            }
-        }
-        closePreviewWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: workItem)
-    }
-
-    private func cancelPendingPreviewClose() {
-        closePreviewWorkItem?.cancel()
-        closePreviewWorkItem = nil
-    }
-
-    private func isMouseInsidePreviewRegion() -> Bool {
-        let mouseLocation = NSEvent.mouseLocation
-        if let thumbnailFrameOnScreen, thumbnailFrameOnScreen.contains(mouseLocation) {
-            return true
-        }
-        return false
-    }
-
     private var thumbnailFrameOnScreen: NSRect? {
         guard let window else {
             return nil
         }
         let frameInWindow = convert(bounds, to: nil)
         return window.convertToScreen(frameInWindow)
+    }
+
+    func isMouseInsideThumbnailOnScreen() -> Bool {
+        guard let thumbnailFrameOnScreen else {
+            return false
+        }
+        return thumbnailFrameOnScreen.contains(NSEvent.mouseLocation)
     }
 
     private var previewScreenVisibleFrame: NSRect? {
@@ -978,40 +1054,11 @@ private final class BookmarkPreviewPanel: NSPanel {
 }
 
 private final class BookmarkPreviewTrackingView: NSView {
-    var onMouseEntered: (() -> Void)?
-    var onMouseExited: (() -> Void)?
     var onLayout: ((NSRect) -> Void)?
-
-    private var trackingArea: NSTrackingArea?
 
     override func layout() {
         super.layout()
         onLayout?(bounds)
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        self.trackingArea = trackingArea
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        _ = event
-        onMouseEntered?()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        _ = event
-        onMouseExited?()
     }
 }
 

@@ -40,6 +40,14 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var hasLoadedClipPlaybackStoreCache = false
     private var persistSelectionWorkItem: DispatchWorkItem?
     private var persistPlaybackWorkItem: DispatchWorkItem?
+    private let selectionPersistenceQueue = DispatchQueue(
+        label: "quickpreview.clip-selection.persistence",
+        qos: .utility
+    )
+    private let playbackPersistenceQueue = DispatchQueue(
+        label: "quickpreview.clip-playback.persistence",
+        qos: .utility
+    )
     private let persistDebounceInterval: TimeInterval = 0.2
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
@@ -208,7 +216,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func flushPersistedStateWrites() {
-        flushPendingPersistedStateWrites()
+        flushPendingPersistedStateWrites(blocking: true)
     }
 
     func loopEnabled() -> Bool {
@@ -1025,7 +1033,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         )
         storeClipPlaybackState(state, for: currentVideoURL)
         if flushImmediately {
-            flushPendingPersistedStateWrites()
+            flushPendingPersistedStateWrites(blocking: false)
         }
     }
 
@@ -1129,12 +1137,13 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func scheduleSelectionStorePersist() {
         persistSelectionWorkItem?.cancel()
+        let snapshot = clipSelectionStoreCache
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if let data = try? JSONEncoder().encode(self.clipSelectionStoreCache) {
-                UserDefaults.standard.set(data, forKey: Self.clipSelectionDefaultsKey)
-            }
             self.persistSelectionWorkItem = nil
+            self.selectionPersistenceQueue.async { [weak self] in
+                self?.persistSelectionSnapshot(snapshot)
+            }
         }
         persistSelectionWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
@@ -1142,31 +1151,62 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func schedulePlaybackStorePersist() {
         persistPlaybackWorkItem?.cancel()
+        let snapshot = clipPlaybackStoreCache
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if let data = try? JSONEncoder().encode(self.clipPlaybackStoreCache) {
-                UserDefaults.standard.set(data, forKey: Self.clipPlaybackDefaultsKey)
-            }
             self.persistPlaybackWorkItem = nil
+            self.playbackPersistenceQueue.async { [weak self] in
+                self?.persistPlaybackSnapshot(snapshot)
+            }
         }
         persistPlaybackWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + persistDebounceInterval, execute: workItem)
     }
 
-    private func flushPendingPersistedStateWrites() {
+    private func flushPendingPersistedStateWrites(blocking: Bool = false) {
         if let workItem = persistSelectionWorkItem {
             workItem.cancel()
-            if let data = try? JSONEncoder().encode(clipSelectionStoreCache) {
-                UserDefaults.standard.set(data, forKey: Self.clipSelectionDefaultsKey)
-            }
             persistSelectionWorkItem = nil
+            let snapshot = clipSelectionStoreCache
+            if blocking {
+                selectionPersistenceQueue.sync {
+                    persistSelectionSnapshot(snapshot)
+                }
+            } else {
+                selectionPersistenceQueue.async { [weak self] in
+                    self?.persistSelectionSnapshot(snapshot)
+                }
+            }
         }
         if let workItem = persistPlaybackWorkItem {
             workItem.cancel()
-            if let data = try? JSONEncoder().encode(clipPlaybackStoreCache) {
-                UserDefaults.standard.set(data, forKey: Self.clipPlaybackDefaultsKey)
-            }
             persistPlaybackWorkItem = nil
+            let snapshot = clipPlaybackStoreCache
+            if blocking {
+                playbackPersistenceQueue.sync {
+                    persistPlaybackSnapshot(snapshot)
+                }
+            } else {
+                playbackPersistenceQueue.async { [weak self] in
+                    self?.persistPlaybackSnapshot(snapshot)
+                }
+            }
+        }
+        if blocking {
+            selectionPersistenceQueue.sync {}
+            playbackPersistenceQueue.sync {}
+        }
+    }
+
+    private func persistSelectionSnapshot(_ snapshot: [String: ClipSelection]) {
+        if let data = try? JSONEncoder().encode(snapshot) {
+            UserDefaults.standard.set(data, forKey: Self.clipSelectionDefaultsKey)
+        }
+    }
+
+    private func persistPlaybackSnapshot(_ snapshot: [String: ClipPlaybackState]) {
+        if let data = try? JSONEncoder().encode(snapshot) {
+            UserDefaults.standard.set(data, forKey: Self.clipPlaybackDefaultsKey)
         }
     }
 }

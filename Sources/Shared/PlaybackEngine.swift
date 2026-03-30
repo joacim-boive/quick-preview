@@ -14,6 +14,10 @@ final class PlaybackEngine {
     private var pendingScrubSeekSeconds: PlaybackSeconds?
     private var scrubTimer: DispatchSourceTimer?
     private var audioGain: Float = 1.0
+    private let audioMixQueue = DispatchQueue(
+        label: "quickpreview.playback-engine.audio-mix",
+        qos: .userInitiated
+    )
 
     var onPositionUpdate: PositionUpdateHandler?
     var onLoopModeUpdate: LoopModeUpdateHandler?
@@ -40,7 +44,7 @@ final class PlaybackEngine {
 
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
-        applyAudioGainToCurrentItem()
+        applyAudioGainToCurrentItem(item)
 
         detachTimeObserver()
         attachTimeObserver()
@@ -136,21 +140,48 @@ final class PlaybackEngine {
 
     private func applyAudioGainToCurrentItem() {
         guard let item = player.currentItem else { return }
+        applyAudioGainToCurrentItem(item)
+    }
 
-        // AVPlayer.volume is documented as 0.0...1.0; use AVAudioMix to exceed 100%.
-        player.volume = 1.0
+    private func applyAudioGainToCurrentItem(_ item: AVPlayerItem) {
+        let requestedGain = max(audioGain, 0)
 
-        let inputParameters: [AVMutableAudioMixInputParameters] = item.tracks.compactMap { itemTrack in
-            guard let assetTrack = itemTrack.assetTrack, assetTrack.mediaType == .audio else { return nil }
-            let params = AVMutableAudioMixInputParameters(track: assetTrack)
-            params.setVolume(audioGain, at: .zero)
-            return params
+        if requestedGain <= 1 {
+            item.audioMix = nil
+            player.volume = requestedGain
+            return
         }
 
-        guard !inputParameters.isEmpty else { return }
-        let audioMix = AVMutableAudioMix()
-        audioMix.inputParameters = inputParameters
-        item.audioMix = audioMix
+        // Keep playback responsive by preparing the audio mix off the main thread.
+        item.audioMix = nil
+        player.volume = 1.0
+
+        let asset = item.asset
+        audioMixQueue.async { [weak self, weak item] in
+            guard let self, let item else { return }
+            let audioTracks = asset.tracks(withMediaType: .audio)
+            guard !audioTracks.isEmpty else { return }
+
+            let inputParameters = audioTracks.map { track in
+                let params = AVMutableAudioMixInputParameters(track: track)
+                params.setVolume(requestedGain, at: .zero)
+                return params
+            }
+
+            let audioMix = AVMutableAudioMix()
+            audioMix.inputParameters = inputParameters
+
+            DispatchQueue.main.async { [weak self, weak item] in
+                guard let self, let item else { return }
+                guard self.player.currentItem === item else { return }
+                guard self.audioGain > 1 else {
+                    self.applyAudioGainToCurrentItem()
+                    return
+                }
+                item.audioMix = audioMix
+                self.player.volume = 1.0
+            }
+        }
     }
 
     func beginScrubbing() {
