@@ -27,6 +27,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private let scrollView = NSScrollView(frame: .zero)
     private let tableView = BookmarkTableView(frame: .zero)
     private let emptyStateLabel = NSTextField(labelWithString: "No bookmarks yet.")
+    private var escMonitor: Any?
+    private var bookmarkNavigationMonitor: Any?
     private var bookmarkChangeObserver: NSObjectProtocol?
     private var protectedSessionObserver: NSObjectProtocol?
     private var bookmarks: [Bookmark] = []
@@ -52,6 +54,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     var onOpenBookmark: ((Bookmark) -> Void)?
     var onWindowClosed: (() -> Void)?
+    var onEscapeKey: (() -> Void)?
+    var onPlayPauseRequested: (() -> Void)?
 
     init(
         bookmarkStore: BookmarkStore,
@@ -75,6 +79,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         window.delegate = self
         configureUI(on: rootView)
         installObservers()
+        installEscKeyMonitor()
+        installBookmarkNavigationMonitor()
         reloadBookmarks()
     }
 
@@ -84,6 +90,12 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     deinit {
+        if let escMonitor {
+            NSEvent.removeMonitor(escMonitor)
+        }
+        if let bookmarkNavigationMonitor {
+            NSEvent.removeMonitor(bookmarkNavigationMonitor)
+        }
         if let bookmarkChangeObserver {
             NotificationCenter.default.removeObserver(bookmarkChangeObserver)
         }
@@ -106,6 +118,29 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             scopeControl.selectedSegment = BookmarkListScope.allVideos.rawValue
         }
         reloadBookmarks(selecting: bookmark.id)
+    }
+
+    func navigateSelection(delta: Int) {
+        guard
+            delta != 0,
+            !bookmarks.isEmpty,
+            window?.isVisible == true
+        else {
+            return
+        }
+
+        let selectedRow = tableView.selectedRow
+        let unclampedRow = selectedRow >= 0
+            ? selectedRow + delta
+            : (delta > 0 ? 0 : bookmarks.count - 1)
+        let targetRow = min(max(unclampedRow, 0), bookmarks.count - 1)
+
+        guard targetRow != selectedRow else {
+            return
+        }
+
+        tableView.selectRowIndexes(IndexSet(integer: targetRow), byExtendingSelection: false)
+        tableView.scrollRowToVisible(targetRow)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -151,7 +186,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
         tableView.translatesAutoresizingMaskIntoConstraints = false
         tableView.headerView = NSTableHeaderView()
-        tableView.allowsMultipleSelection = false
+        tableView.allowsMultipleSelection = true
         tableView.allowsEmptySelection = true
         tableView.rowHeight = 64
         tableView.intercellSpacing = NSSize(width: 0, height: 6)
@@ -293,14 +328,76 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func installEscKeyMonitor() {
+        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard
+                let self,
+                event.keyCode == 53,
+                let window = self.window,
+                event.window === window
+            else {
+                return event
+            }
+            self.onEscapeKey?()
+            return event
+        }
+    }
+
+    private func installBookmarkNavigationMonitor() {
+        bookmarkNavigationMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard
+                let self,
+                let window = self.window,
+                window.isVisible,
+                event.window === window
+            else {
+                return event
+            }
+
+            let disallowedModifiers = event.modifierFlags.intersection([.shift, .command, .control, .option])
+            guard disallowedModifiers.isEmpty else {
+                return event
+            }
+
+            switch event.keyCode {
+            case 49:
+                guard !self.isEditingTextField else {
+                    return event
+                }
+                self.onPlayPauseRequested?()
+                return nil
+            case 126:
+                self.navigateSelection(delta: -1)
+                return nil
+            case 125:
+                self.navigateSelection(delta: 1)
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private var isEditingTextField: Bool {
+        guard let firstResponder = window?.firstResponder as? NSTextView else {
+            return false
+        }
+        return firstResponder.isFieldEditor
+    }
+
     private func reloadBookmarks(selecting bookmarkID: BookmarkID? = nil) {
         dismissVisiblePreviewPanels()
         refreshScopeControl()
-        let selectedBookmarkID: BookmarkID? = {
-            guard tableView.selectedRow >= 0, tableView.selectedRow < bookmarks.count else {
-                return bookmarkID
+        let selectedBookmarkIDs: Set<BookmarkID> = {
+            if let bookmarkID {
+                return Set([bookmarkID])
             }
-            return bookmarkID ?? bookmarks[tableView.selectedRow].id
+            return Set(tableView.selectedRowIndexes.compactMap { row in
+                guard row >= 0, row < bookmarks.count else {
+                    return nil
+                }
+                return bookmarks[row].id
+            })
         }()
 
         bookmarks = bookmarkStore.bookmarks(
@@ -313,10 +410,16 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         suppressBookmarkOpenOnSelectionChange = true
         tableView.reloadData()
 
-        if let selectedBookmarkID,
-           let row = bookmarks.firstIndex(where: { $0.id == selectedBookmarkID }) {
-            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            tableView.scrollRowToVisible(row)
+        let rowsToSelect = selectedBookmarkIDs.reduce(into: IndexSet()) { result, bookmarkID in
+            guard let row = bookmarks.firstIndex(where: { $0.id == bookmarkID }) else {
+                return
+            }
+            result.insert(row)
+        }
+
+        if let firstSelectedRow = rowsToSelect.first {
+            tableView.selectRowIndexes(rowsToSelect, byExtendingSelection: false)
+            tableView.scrollRowToVisible(firstSelectedRow)
         } else {
             tableView.deselectAll(nil)
         }
@@ -354,22 +457,35 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func openSelectedBookmark() {
-        guard tableView.selectedRow >= 0, tableView.selectedRow < bookmarks.count else {
+        guard tableView.selectedRowIndexes.count == 1,
+              let selectedRow = tableView.selectedRowIndexes.first,
+              selectedRow >= 0,
+              selectedRow < bookmarks.count else {
             return
         }
         dismissVisiblePreviewPanels()
-        onOpenBookmark?(bookmarks[tableView.selectedRow])
+        onOpenBookmark?(bookmarks[selectedRow])
     }
 
     private func removeSelectedBookmark() {
-        guard tableView.selectedRow >= 0, tableView.selectedRow < bookmarks.count else {
+        let selectedBookmarkIDs: Set<BookmarkID> = Set(tableView.selectedRowIndexes.compactMap { row in
+            guard row >= 0, row < bookmarks.count else {
+                return nil
+            }
+            return bookmarks[row].id
+        })
+        guard !selectedBookmarkIDs.isEmpty else {
             return
         }
-        bookmarkStore.removeBookmark(id: bookmarks[tableView.selectedRow].id)
+        bookmarkStore.removeBookmarks(ids: selectedBookmarkIDs)
     }
 
     private func removeBookmark(at row: Int) {
         guard row >= 0, row < bookmarks.count else {
+            return
+        }
+        if tableView.selectedRowIndexes.contains(row), tableView.selectedRowIndexes.count > 1 {
+            removeSelectedBookmark()
             return
         }
         bookmarkStore.removeBookmark(id: bookmarks[row].id)
@@ -1288,7 +1404,7 @@ private final class BookmarkTagsTextField: NSTextField {
         onInteraction?()
         if let tableView = enclosingTableView {
             let row = tableView.row(for: self)
-            if row >= 0, tableView.selectedRow != row {
+            if row >= 0, !tableView.selectedRowIndexes.contains(row) {
                 tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             }
         }

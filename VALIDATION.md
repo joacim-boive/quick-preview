@@ -8,7 +8,7 @@
 - Shared playback logic includes:
   - Full-loop mode
   - Range-loop primitives for future A-B loop support
-  - Fine/coarse seek and frame-step behavior
+  - Fine/coarse seek, bookmark navigation, and Shift+Up/Down frame-step behavior
 - No editor diagnostics reported for `Sources` and project file via IDE lint scan.
 
 ## Build Verification Results
@@ -32,8 +32,9 @@ Built artifacts were produced at:
 3. Verify controls:
    - Space (play/pause)
    - L (loop on/off)
-   - Arrow keys fine/coarse seek
-   - Up/Down frame-step
+   - Left/Right and Shift+Left/Right seek behavior
+   - Up/Down bookmark navigation with the bookmark manager open
+   - Shift+Up/Down frame-step
    - Slider precision and smooth playback after repeated seeks
 
 ## Known Constraints
