@@ -20,11 +20,17 @@ macOS standalone video player focused on fast preview and loop workflows:
 - `L`: Toggle full-video looping
 - `Left/Right`: Fine seek (`0.1s`)
 - `Shift+Left/Shift+Right`: Coarse seek (`1.0s`)
+- `Option+Up/Option+Down`: Jump to the next/previous bookmark on the current clip
 - `Up/Down`: Move through bookmarks while the bookmark manager is open
 - `Shift+Up/Down`: Frame step (+/- one frame, with fine-step fallback)
 - `Set Start` / `Set End`: Mark replay selection points
 - `Replay Selection`: Loop only the marked segment
 - `Clear Selection`: Remove current replay segment
+
+## Bookmark Timeline Markers
+
+- The main player timeline shows thin markers for every saved bookmark on the currently loaded clip.
+- Opening a clip from any bookmark still shows markers for the clip's other bookmarks right away.
 
 ## Finder Selection Follow
 
