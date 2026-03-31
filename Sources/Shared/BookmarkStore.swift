@@ -167,6 +167,11 @@ struct Bookmark: Codable, Equatable {
     }
 }
 
+struct BookmarkTagCount: Equatable {
+    let tag: String
+    let count: Int
+}
+
 enum BookmarkVisibility: Equatable {
     case publicOnly
     case all
@@ -233,6 +238,72 @@ final class BookmarkStore {
         return filteredBookmarks(cache, visibility: visibility).sorted(by: bookmarkSortComparator)
     }
 
+    func tagCounts(
+        selectedTags: [String] = [],
+        scope: BookmarkListScope,
+        currentVideoURL: URL?,
+        searchQuery: String,
+        visibility: BookmarkVisibility = .publicOnly
+    ) -> [BookmarkTagCount] {
+        loadCacheIfNeeded()
+        let matchingBookmarks = bookmarksMatchingSelectedTags(
+            selectedTags,
+            scope: scope,
+            currentVideoURL: currentVideoURL,
+            searchQuery: searchQuery,
+            sort: .automatic,
+            visibility: visibility
+        )
+
+        var countsByNormalizedTag: [String: Int] = [:]
+        var displayTagByNormalizedTag: [String: String] = [:]
+
+        for bookmark in matchingBookmarks where !bookmark.tags.isEmpty {
+            for tag in bookmark.tags {
+                let normalizedTag = tag.localizedLowercase
+                countsByNormalizedTag[normalizedTag, default: 0] += 1
+                displayTagByNormalizedTag[normalizedTag] = displayTagByNormalizedTag[normalizedTag] ?? tag
+            }
+        }
+
+        return countsByNormalizedTag.compactMap { normalizedTag, count in
+            guard count > 0, let tag = displayTagByNormalizedTag[normalizedTag] else {
+                return nil
+            }
+            return BookmarkTagCount(tag: tag, count: count)
+        }
+        .sorted { lhs, rhs in
+            if lhs.count != rhs.count {
+                return lhs.count > rhs.count
+            }
+            return lhs.tag.localizedCaseInsensitiveCompare(rhs.tag) == .orderedAscending
+        }
+    }
+
+    func bookmarksMatchingSelectedTags(
+        _ selectedTags: [String],
+        scope: BookmarkListScope,
+        currentVideoURL: URL?,
+        searchQuery: String,
+        sort: BookmarkSort = .automatic,
+        visibility: BookmarkVisibility = .publicOnly
+    ) -> [Bookmark] {
+        loadCacheIfNeeded()
+        let visibleBookmarks = filteredBookmarks(
+            scope: scope,
+            currentVideoURL: currentVideoURL,
+            searchQuery: searchQuery,
+            visibility: visibility
+        )
+        let normalizedSelectedTags = Self.normalizedSelectedTags(selectedTags)
+
+        let matchingBookmarks = visibleBookmarks.filter { bookmark in
+            matchesSelectedTags(bookmark, normalizedSelectedTags: normalizedSelectedTags)
+        }
+
+        return matchingBookmarks.sorted(by: sortComparator(for: sort, scope: scope))
+    }
+
     func bookmarks(
         scope: BookmarkListScope,
         currentVideoURL: URL?,
@@ -241,24 +312,12 @@ final class BookmarkStore {
         visibility: BookmarkVisibility = .publicOnly
     ) -> [Bookmark] {
         loadCacheIfNeeded()
-        let normalizedVideoPath = currentVideoURL?.standardizedFileURL.path
-        let queryTokens = normalizedSearchTokens(from: searchQuery)
-        var results: [Bookmark] = []
-        results.reserveCapacity(cache.count)
-
-        for bookmark in cache {
-            guard matchesVisibility(bookmark, visibility: visibility) else {
-                continue
-            }
-            guard matchesScope(bookmark, scope: scope, normalizedVideoPath: normalizedVideoPath) else {
-                continue
-            }
-            guard matchesQuery(bookmark, queryTokens: queryTokens) else {
-                continue
-            }
-            results.append(bookmark)
-        }
-
+        let results = filteredBookmarks(
+            scope: scope,
+            currentVideoURL: currentVideoURL,
+            searchQuery: searchQuery,
+            visibility: visibility
+        )
         return results.sorted(by: sortComparator(for: sort, scope: scope))
     }
 
@@ -576,6 +635,33 @@ final class BookmarkStore {
         }
     }
 
+    private func filteredBookmarks(
+        scope: BookmarkListScope,
+        currentVideoURL: URL?,
+        searchQuery: String,
+        visibility: BookmarkVisibility
+    ) -> [Bookmark] {
+        let normalizedVideoPath = currentVideoURL?.standardizedFileURL.path
+        let queryTokens = normalizedSearchTokens(from: searchQuery)
+        var results: [Bookmark] = []
+        results.reserveCapacity(cache.count)
+
+        for bookmark in cache {
+            guard matchesVisibility(bookmark, visibility: visibility) else {
+                continue
+            }
+            guard matchesScope(bookmark, scope: scope, normalizedVideoPath: normalizedVideoPath) else {
+                continue
+            }
+            guard matchesQuery(bookmark, queryTokens: queryTokens) else {
+                continue
+            }
+            results.append(bookmark)
+        }
+
+        return results
+    }
+
     private func schedulePersist() {
         persistWorkItem?.cancel()
         let snapshot = cache
@@ -673,6 +759,18 @@ final class BookmarkStore {
         return queryTokens.allSatisfy { token in
             preparedBookmark.searchableTokens.contains(where: { $0.contains(token) })
         }
+    }
+
+    private func matchesSelectedTags(
+        _ bookmark: Bookmark,
+        normalizedSelectedTags: Set<String>
+    ) -> Bool {
+        guard !normalizedSelectedTags.isEmpty else {
+            return true
+        }
+
+        let normalizedBookmarkTags = Set(bookmark.tags.map(\.localizedLowercase))
+        return normalizedSelectedTags.isSubset(of: normalizedBookmarkTags)
     }
 
     private func persistSnapshot(_ snapshot: [Bookmark]) {
@@ -788,5 +886,13 @@ final class BookmarkStore {
             }
             result.append(normalizedURL)
         }
+    }
+
+    private static func normalizedSelectedTags(_ selectedTags: [String]) -> Set<String> {
+        Set(
+            selectedTags
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase }
+                .filter { !$0.isEmpty }
+        )
     }
 }

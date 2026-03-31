@@ -7,6 +7,11 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private static let reopenOnLaunchDefaultsKey = "reopenBookmarksWindowOnLaunch"
     private static let windowFrameDefaultsKey = "bookmarksWindowFrame"
 
+    private enum DisplayMode: Int {
+        case bookmarks
+        case tagBrowser
+    }
+
     private enum ColumnIdentifier {
         static let thumbnail = NSUserInterfaceItemIdentifier("thumbnail")
         static let time = NSUserInterfaceItemIdentifier("time")
@@ -37,7 +42,26 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private let protectedBookmarksSessionController: ProtectedBookmarksSessionController
     private let searchField = NSSearchField(frame: .zero)
     private let scopeControl = NSSegmentedControl(labels: ["Current Video", "All Videos", "Imported"], trackingMode: .selectOne, target: nil, action: nil)
+    private let modeControl = NSSegmentedControl(labels: ["Bookmarks", "Tags"], trackingMode: .selectOne, target: nil, action: nil)
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
+    private let contentStackView = NSStackView()
+    private let tagSelectionRow = NSStackView()
+    private let tagSelectionSummaryLabel = NSTextField(labelWithString: "")
+    private let clearTagSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
+    private let tagCloudContainerView = NSView(frame: .zero)
+    private let tagCloudScrollView = NSScrollView(frame: .zero)
+    private let tagCloudCollectionView: NSCollectionView = {
+        let layout = NSCollectionViewFlowLayout()
+        layout.minimumInteritemSpacing = 8
+        layout.minimumLineSpacing = 8
+        layout.sectionInset = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        let collectionView = NSCollectionView(frame: .zero)
+        collectionView.collectionViewLayout = layout
+        collectionView.isSelectable = false
+        return collectionView
+    }()
+    private let tagCloudEmptyStateLabel = NSTextField(labelWithString: "No tags available in the current scope.")
+    private let matchingClipsCountLabel = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView(frame: .zero)
     private let tableView = BookmarkTableView(frame: .zero)
     private let emptyStateLabel = NSTextField(labelWithString: "No bookmarks yet.")
@@ -45,10 +69,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private var bookmarkNavigationMonitor: Any?
     private var bookmarkChangeObserver: NSObjectProtocol?
     private var protectedSessionObserver: NSObjectProtocol?
+    private var tagCloudHeightConstraint: NSLayoutConstraint?
     private var bookmarks: [Bookmark] = []
+    private var tagCounts: [BookmarkTagCount] = []
+    private var selectedTags: [String] = []
     private var currentVideoURL: URL?
     private var currentScope: BookmarkListScope = .currentVideo
     private var currentSort: BookmarkSort = .automatic
+    private var currentDisplayMode: DisplayMode = .bookmarks
     private var suppressBookmarkOpenOnSelectionChange = false
     private weak var activePreviewThumbnailCell: BookmarkThumbnailCellView?
     private var activeThumbnailPickerSheetController: BookmarkThumbnailPickerSheetController?
@@ -274,6 +302,12 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         scopeControl.segmentStyle = .rounded
         refreshScopeControl()
 
+        modeControl.translatesAutoresizingMaskIntoConstraints = false
+        modeControl.target = self
+        modeControl.action = #selector(handleDisplayModeChanged(_:))
+        modeControl.segmentStyle = .rounded
+        modeControl.selectedSegment = currentDisplayMode.rawValue
+
         importButton.translatesAutoresizingMaskIntoConstraints = false
         importButton.target = self
         importButton.action = #selector(handleImportMedia(_:))
@@ -281,7 +315,61 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
         controlsRow.addArrangedSubview(searchField)
         controlsRow.addArrangedSubview(scopeControl)
+        controlsRow.addArrangedSubview(modeControl)
         controlsRow.addArrangedSubview(importButton)
+
+        contentStackView.translatesAutoresizingMaskIntoConstraints = false
+        contentStackView.orientation = .vertical
+        contentStackView.alignment = .leading
+        contentStackView.spacing = 12
+
+        tagSelectionRow.translatesAutoresizingMaskIntoConstraints = false
+        tagSelectionRow.orientation = .horizontal
+        tagSelectionRow.alignment = .centerY
+        tagSelectionRow.spacing = 10
+
+        tagSelectionSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
+        tagSelectionSummaryLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        tagSelectionSummaryLabel.lineBreakMode = .byTruncatingTail
+
+        clearTagSelectionButton.translatesAutoresizingMaskIntoConstraints = false
+        clearTagSelectionButton.target = self
+        clearTagSelectionButton.action = #selector(handleClearTagSelection(_:))
+        clearTagSelectionButton.bezelStyle = .rounded
+
+        tagSelectionRow.addArrangedSubview(tagSelectionSummaryLabel)
+        tagSelectionRow.addArrangedSubview(clearTagSelectionButton)
+
+        tagCloudContainerView.translatesAutoresizingMaskIntoConstraints = false
+
+        tagCloudScrollView.translatesAutoresizingMaskIntoConstraints = false
+        tagCloudScrollView.hasVerticalScroller = true
+        tagCloudScrollView.hasHorizontalScroller = false
+        tagCloudScrollView.autohidesScrollers = true
+        tagCloudScrollView.borderType = .bezelBorder
+
+        tagCloudCollectionView.translatesAutoresizingMaskIntoConstraints = false
+        tagCloudCollectionView.dataSource = self
+        tagCloudCollectionView.delegate = self
+        tagCloudCollectionView.register(
+            BookmarkTagCloudItem.self,
+            forItemWithIdentifier: BookmarkTagCloudItem.reuseIdentifier
+        )
+        tagCloudScrollView.documentView = tagCloudCollectionView
+
+        tagCloudEmptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
+        tagCloudEmptyStateLabel.alignment = .center
+        tagCloudEmptyStateLabel.textColor = .secondaryLabelColor
+        tagCloudEmptyStateLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        tagCloudEmptyStateLabel.maximumNumberOfLines = 2
+        tagCloudEmptyStateLabel.lineBreakMode = .byWordWrapping
+
+        tagCloudContainerView.addSubview(tagCloudScrollView)
+        tagCloudContainerView.addSubview(tagCloudEmptyStateLabel)
+
+        matchingClipsCountLabel.translatesAutoresizingMaskIntoConstraints = false
+        matchingClipsCountLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        matchingClipsCountLabel.textColor = .secondaryLabelColor
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
@@ -399,8 +487,13 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         emptyStateLabel.font = .systemFont(ofSize: 15, weight: .medium)
 
         contentView.addSubview(controlsRow)
-        contentView.addSubview(scrollView)
+        contentView.addSubview(contentStackView)
         contentView.addSubview(emptyStateLabel)
+
+        contentStackView.addArrangedSubview(tagSelectionRow)
+        contentStackView.addArrangedSubview(tagCloudContainerView)
+        contentStackView.addArrangedSubview(matchingClipsCountLabel)
+        contentStackView.addArrangedSubview(scrollView)
 
         NSLayoutConstraint.activate([
             controlsRow.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 14),
@@ -409,16 +502,36 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
             searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
 
-            scrollView.topAnchor.constraint(equalTo: controlsRow.bottomAnchor, constant: 12),
-            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
-            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
-            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
+            contentStackView.topAnchor.constraint(equalTo: controlsRow.bottomAnchor, constant: 12),
+            contentStackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            contentStackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            contentStackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
+
+            tagSelectionRow.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
+            tagCloudContainerView.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
+            matchingClipsCountLabel.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
+            scrollView.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
+
+            tagCloudScrollView.topAnchor.constraint(equalTo: tagCloudContainerView.topAnchor),
+            tagCloudScrollView.leadingAnchor.constraint(equalTo: tagCloudContainerView.leadingAnchor),
+            tagCloudScrollView.trailingAnchor.constraint(equalTo: tagCloudContainerView.trailingAnchor),
+            tagCloudScrollView.bottomAnchor.constraint(equalTo: tagCloudContainerView.bottomAnchor),
+
+            tagCloudEmptyStateLabel.centerXAnchor.constraint(equalTo: tagCloudContainerView.centerXAnchor),
+            tagCloudEmptyStateLabel.centerYAnchor.constraint(equalTo: tagCloudContainerView.centerYAnchor),
+            tagCloudEmptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: tagCloudContainerView.leadingAnchor, constant: 16),
+            tagCloudEmptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: tagCloudContainerView.trailingAnchor, constant: -16),
 
             emptyStateLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
             emptyStateLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor, constant: 20),
             emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: scrollView.trailingAnchor, constant: -20)
         ])
+        let tagCloudHeightConstraint = tagCloudContainerView.heightAnchor.constraint(equalToConstant: 56)
+        tagCloudHeightConstraint.isActive = true
+        self.tagCloudHeightConstraint = tagCloudHeightConstraint
+
+        refreshDisplayModeUI()
 
         rootView.onFileURLsDropped = { [weak self] urls in
             self?.importMedia(from: urls)
@@ -503,6 +616,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private func reloadBookmarks(selecting bookmarkID: BookmarkID? = nil) {
         dismissVisiblePreviewPanels()
         refreshScopeControl()
+        refreshDisplayModeUI()
         let selectedBookmarkIDs: Set<BookmarkID> = {
             if let bookmarkID {
                 return Set([bookmarkID])
@@ -515,13 +629,41 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             })
         }()
 
-        bookmarks = bookmarkStore.bookmarks(
-            scope: currentScope,
-            currentVideoURL: currentVideoURL,
-            searchQuery: searchField.stringValue,
-            sort: currentSort,
-            visibility: bookmarkVisibility
-        )
+        let searchQuery = searchField.stringValue
+        let visibility = bookmarkVisibility
+        if currentDisplayMode == .tagBrowser {
+            tagCounts = bookmarkStore.tagCounts(
+                selectedTags: selectedTags,
+                scope: currentScope,
+                currentVideoURL: currentVideoURL,
+                searchQuery: searchQuery,
+                visibility: visibility
+            )
+            bookmarks = bookmarkStore.bookmarksMatchingSelectedTags(
+                selectedTags,
+                scope: currentScope,
+                currentVideoURL: currentVideoURL,
+                searchQuery: searchQuery,
+                sort: currentSort,
+                visibility: visibility
+            )
+            updateTagSelectionSummary()
+            updateMatchingClipsCount()
+            tagCloudCollectionView.reloadData()
+            tagCloudCollectionView.layoutSubtreeIfNeeded()
+            updateTagCloudHeight()
+        } else {
+            tagCounts = []
+            bookmarks = bookmarkStore.bookmarks(
+                scope: currentScope,
+                currentVideoURL: currentVideoURL,
+                searchQuery: searchQuery,
+                sort: currentSort,
+                visibility: visibility
+            )
+            updateTagCloudHeight()
+        }
+
         suppressBookmarkOpenOnSelectionChange = true
         tableView.reloadData()
 
@@ -549,30 +691,42 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     private func updateEmptyState() {
         let message: String
-        switch currentScope {
-        case .currentVideo where currentVideoURL == nil:
-            message = "Load a video to view bookmarks for the current clip."
-        case .currentVideo:
-            message = searchField.stringValue.isEmpty
-                ? "No bookmarks for this video yet."
-                : "No bookmarks match your current search."
-        case .allVideos:
-            message = searchField.stringValue.isEmpty
-                ? "No bookmarks saved yet."
-                : "No bookmarks match your current search."
-        case .imported:
-            message = searchField.stringValue.isEmpty
-                ? "No imported media yet."
-                : "No imported media matches your current search."
-        case .protected:
-            message = searchField.stringValue.isEmpty
-                ? "No protected bookmarks yet."
-                : "No protected bookmarks match your current search."
+        switch currentDisplayMode {
+        case .bookmarks:
+            switch currentScope {
+            case .currentVideo where currentVideoURL == nil:
+                message = "Load a video to view bookmarks for the current clip."
+            case .currentVideo:
+                message = searchField.stringValue.isEmpty
+                    ? "No bookmarks for this video yet."
+                    : "No bookmarks match your current search."
+            case .allVideos:
+                message = searchField.stringValue.isEmpty
+                    ? "No bookmarks saved yet."
+                    : "No bookmarks match your current search."
+            case .imported:
+                message = searchField.stringValue.isEmpty
+                    ? "No imported media yet."
+                    : "No imported media matches your current search."
+            case .protected:
+                message = searchField.stringValue.isEmpty
+                    ? "No protected bookmarks yet."
+                    : "No protected bookmarks match your current search."
+            }
+        case .tagBrowser:
+            if currentScope == .currentVideo, currentVideoURL == nil {
+                message = "Load a video to explore tags for the current clip."
+            } else if selectedTags.isEmpty {
+                message = "No clips available for the current tag filters."
+            } else {
+                message = "No clips match the selected tags."
+            }
         }
         emptyStateLabel.stringValue = message
         let isEmpty = bookmarks.isEmpty
         emptyStateLabel.isHidden = !isEmpty
         scrollView.alphaValue = isEmpty ? 0.78 : 1
+        tagCloudEmptyStateLabel.isHidden = currentDisplayMode != .tagBrowser || !tagCounts.isEmpty
     }
 
     private func openSelectedBookmark() {
@@ -673,6 +827,22 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     @objc
     private func handleScopeChanged(_ sender: NSSegmentedControl) {
         currentScope = BookmarkListScope(rawValue: sender.selectedSegment) ?? fallbackScopeForLockedSession()
+        reloadBookmarks()
+    }
+
+    @objc
+    private func handleDisplayModeChanged(_ sender: NSSegmentedControl) {
+        currentDisplayMode = DisplayMode(rawValue: sender.selectedSegment) ?? .bookmarks
+        reloadBookmarks()
+    }
+
+    @objc
+    private func handleClearTagSelection(_ sender: Any?) {
+        _ = sender
+        guard !selectedTags.isEmpty else {
+            return
+        }
+        selectedTags = []
         reloadBookmarks()
     }
 
@@ -966,6 +1136,62 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         currentVideoURL == nil ? .allVideos : .currentVideo
     }
 
+    private func refreshDisplayModeUI() {
+        let isTagBrowser = currentDisplayMode == .tagBrowser
+        modeControl.selectedSegment = currentDisplayMode.rawValue
+        tagSelectionRow.isHidden = !isTagBrowser
+        tagCloudContainerView.isHidden = !isTagBrowser
+        matchingClipsCountLabel.isHidden = !isTagBrowser
+        updateTagCloudHeight()
+    }
+
+    private func updateTagSelectionSummary() {
+        if selectedTags.isEmpty {
+            tagSelectionSummaryLabel.stringValue = "Showing all visible clips. Select tags to narrow the list."
+        } else {
+            tagSelectionSummaryLabel.stringValue = "Filtering by: \(selectedTags.joined(separator: " + "))"
+        }
+        clearTagSelectionButton.isHidden = selectedTags.isEmpty
+    }
+
+    private func updateMatchingClipsCount() {
+        let clipLabel = bookmarks.count == 1 ? "clip" : "clips"
+        matchingClipsCountLabel.stringValue = "\(bookmarks.count) matching \(clipLabel)"
+    }
+
+    private func toggleTagSelection(_ tag: String) {
+        let normalizedTag = tag.localizedLowercase
+        if let existingIndex = selectedTags.firstIndex(where: { $0.localizedLowercase == normalizedTag }) {
+            selectedTags.remove(at: existingIndex)
+        } else {
+            selectedTags.append(tag)
+            selectedTags.sort { lhs, rhs in
+                lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+            }
+        }
+        reloadBookmarks()
+    }
+
+    private func isTagSelected(_ tag: String) -> Bool {
+        let normalizedTag = tag.localizedLowercase
+        return selectedTags.contains { $0.localizedLowercase == normalizedTag }
+    }
+
+    private func updateTagCloudHeight() {
+        guard let tagCloudHeightConstraint else {
+            return
+        }
+        guard currentDisplayMode == .tagBrowser else {
+            tagCloudHeightConstraint.constant = 0
+            return
+        }
+
+        let minimumHeight: CGFloat = tagCounts.isEmpty ? 56 : 44
+        let maximumHeight: CGFloat = 160
+        let contentHeight = tagCloudCollectionView.collectionViewLayout?.collectionViewContentSize.height ?? 0
+        tagCloudHeightConstraint.constant = min(max(contentHeight, minimumHeight), maximumHeight)
+    }
+
     private func dismissVisiblePreviewPanels() {
         activePreviewThumbnailCell = nil
         for row in 0..<tableView.numberOfRows {
@@ -1247,6 +1473,49 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
     }
 }
 
+extension BookmarksWindowController: NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
+    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
+        _ = collectionView
+        _ = section
+        return tagCounts.count
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
+        guard
+            let item = collectionView.makeItem(
+                withIdentifier: BookmarkTagCloudItem.reuseIdentifier,
+                for: indexPath
+            ) as? BookmarkTagCloudItem
+        else {
+            return NSCollectionViewItem()
+        }
+
+        let tagCount = tagCounts[indexPath.item]
+        item.configure(
+            tagCount: tagCount,
+            isSelected: isTagSelected(tagCount.tag)
+        ) { [weak self] tag in
+            self?.toggleTagSelection(tag)
+        }
+        return item
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        layout collectionViewLayout: NSCollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> NSSize {
+        _ = collectionView
+        _ = collectionViewLayout
+        let tagCount = tagCounts[indexPath.item]
+        let title = BookmarkTagCloudItem.displayTitle(for: tagCount)
+        let titleWidth = (title as NSString).size(
+            withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)]
+        ).width
+        return NSSize(width: ceil(titleWidth) + 34, height: 32)
+    }
+}
+
 extension BookmarksWindowController: NSSearchFieldDelegate, NSTextFieldDelegate {
     func controlTextDidChange(_ obj: Notification) {
         guard obj.object as? NSSearchField === searchField else {
@@ -1290,6 +1559,77 @@ private final class BookmarkTableView: NSTableView {
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
         onScrollWheel?()
+    }
+}
+
+private final class BookmarkTagCloudItem: NSCollectionViewItem {
+    static let reuseIdentifier = NSUserInterfaceItemIdentifier("BookmarkTagCloudItem")
+
+    private let tagButton = NSButton(title: "", target: nil, action: nil)
+    private var tagValue = ""
+    private var onToggle: ((String) -> Void)?
+
+    override func loadView() {
+        view = NSView(frame: .zero)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.translatesAutoresizingMaskIntoConstraints = false
+
+        tagButton.translatesAutoresizingMaskIntoConstraints = false
+        tagButton.setButtonType(.toggle)
+        tagButton.bezelStyle = .rounded
+        tagButton.isBordered = false
+        tagButton.font = .systemFont(ofSize: 13, weight: .semibold)
+        tagButton.target = self
+        tagButton.action = #selector(handleToggle(_:))
+        tagButton.wantsLayer = true
+        tagButton.layer?.cornerRadius = 8
+        tagButton.layer?.masksToBounds = true
+
+        view.addSubview(tagButton)
+        NSLayoutConstraint.activate([
+            tagButton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tagButton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tagButton.topAnchor.constraint(equalTo: view.topAnchor),
+            tagButton.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+
+    func configure(
+        tagCount: BookmarkTagCount,
+        isSelected: Bool,
+        onToggle: @escaping (String) -> Void
+    ) {
+        tagValue = tagCount.tag
+        self.onToggle = onToggle
+        tagButton.title = Self.displayTitle(for: tagCount)
+        tagButton.state = isSelected ? .on : .off
+        tagButton.toolTip = isSelected
+            ? "Click to remove \(tagCount.tag) from the current filter"
+            : "Click to filter clips tagged \(tagCount.tag)"
+        updateSelectionAppearance(isSelected: isSelected)
+    }
+
+    static func displayTitle(for tagCount: BookmarkTagCount) -> String {
+        "\(tagCount.tag) \(tagCount.count)"
+    }
+
+    @objc
+    private func handleToggle(_ sender: NSButton) {
+        _ = sender
+        onToggle?(tagValue)
+    }
+
+    private func updateSelectionAppearance(isSelected: Bool) {
+        if isSelected {
+            tagButton.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            tagButton.contentTintColor = .white
+        } else {
+            tagButton.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            tagButton.contentTintColor = NSColor.labelColor
+        }
     }
 }
 
@@ -1818,6 +2158,7 @@ private final class BookmarkActionsCellView: NSTableCellView {
 
         actionsButton.translatesAutoresizingMaskIntoConstraints = false
         actionsButton.bezelStyle = .smallSquare
+        actionsButton.isBordered = false
         configureActionsButtonAppearance()
         actionsButton.target = self
         actionsButton.action = #selector(handleActionsButton(_:))
@@ -1936,6 +2277,7 @@ private final class BookmarkRemoveCellView: NSTableCellView {
 
         removeButton.translatesAutoresizingMaskIntoConstraints = false
         removeButton.bezelStyle = .smallSquare
+        removeButton.isBordered = false
         removeButton.image = NSImage(
             systemSymbolName: "trash",
             accessibilityDescription: "Remove Bookmark"
