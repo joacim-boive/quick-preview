@@ -2,6 +2,18 @@ import Cocoa
 import AVFoundation
 import UniformTypeIdentifiers
 
+private struct BookmarkTimelineMarker: Equatable, Comparable {
+    let id: BookmarkID
+    let timeSeconds: PlaybackSeconds
+
+    static func < (lhs: BookmarkTimelineMarker, rhs: BookmarkTimelineMarker) -> Bool {
+        if abs(lhs.timeSeconds - rhs.timeSeconds) > 0.0001 {
+            return lhs.timeSeconds < rhs.timeSeconds
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
 final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
     private let bookmarkStore: BookmarkStore
@@ -17,9 +29,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let emptyStateLabel = NSTextField(labelWithString: "No video loaded.\nUse File > Open... or File > Open Finder Selection...")
 
     private var escMonitor: Any?
+    private var bookmarkChangeObserver: NSObjectProtocol?
     private var selectionStart: PlaybackSeconds = 0
     private var selectionEnd: PlaybackSeconds = 0
     private var currentVideoURL: URL?
+    private var currentClipBookmarks: [BookmarkTimelineMarker] = []
+    private var selectedBookmarkID: BookmarkID?
     private var currentRotationDegrees = 0
     private var isLoopEnabled = true
     private var isAutoplayEnabled = MainPlayerWindowController.storedAutoplayPreference()
@@ -35,6 +50,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let playbackCheckpointMinimumDelta: PlaybackSeconds = 0.75
     private var wasPlayingBeforePlayheadDrag = false
     private var wasPlayingBeforeSelectionPreview = false
+    private var wasPlayingBeforeBookmarkDrag = false
     private var selectionPreviewReturnPosition: PlaybackSeconds?
     private var pendingRestoredPlayhead: PlaybackSeconds?
     private var pendingRestoredLoopEnabled: Bool?
@@ -61,6 +77,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
     private static let clipSelectionDefaultsKey = "clipSelectionByPath"
     private static let clipPlaybackDefaultsKey = "clipPlaybackStateByPath"
+    private static let lastOpenedVideoPathDefaultsKey = "lastOpenedVideoPath"
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     var onShowBookmarksRequested: ((Bookmark?) -> Void)?
@@ -113,6 +130,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         window.delegate = self
         configureUI(on: root)
         bindEngine()
+        installBookmarkObserver()
     }
 
     @available(*, unavailable)
@@ -123,6 +141,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     deinit {
         if let escMonitor {
             NSEvent.removeMonitor(escMonitor)
+        }
+        if let bookmarkChangeObserver {
+            NotificationCenter.default.removeObserver(bookmarkChangeObserver)
         }
     }
 
@@ -135,13 +156,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     func openVideo(url: URL, shouldRevealWindow: Bool = true) {
         if shouldRevealWindow {
             revealWindow()
-        } else {
+        } else if window?.isVisible == true {
             window?.orderFront(nil)
         }
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         let normalizedURL = url.standardizedFileURL
+        Self.storeLastOpenedVideoURL(normalizedURL)
         engine.attach(to: normalizedURL, autoplay: isAutoplayEnabled)
         currentVideoURL = normalizedURL
+        synchronizeCurrentClipBookmarks()
         lastKnownDuration = 0
         lastPersistedPlaybackPlayhead = nil
         lastPlaybackPersistenceUptime = 0
@@ -286,6 +309,20 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     static func storeAutoplayPreference(_ enabled: Bool, defaults: UserDefaults = .standard) {
         defaults.set(enabled, forKey: autoplayDefaultsKey)
+    }
+
+    static func storedLastOpenedVideoURL(defaults: UserDefaults = .standard) -> URL? {
+        guard
+            let storedPath = defaults.string(forKey: lastOpenedVideoPathDefaultsKey),
+            !storedPath.isEmpty
+        else {
+            return nil
+        }
+        return URL(fileURLWithPath: storedPath).standardizedFileURL
+    }
+
+    static func clearStoredLastOpenedVideoURL(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: lastOpenedVideoPathDefaultsKey)
     }
 
     func rotationDegrees() -> Int {
@@ -507,6 +544,24 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             let duration = max(self.engine.currentDurationSeconds(), 0)
             self.timeLabel.stringValue = "\(Self.format(returnPosition)) / \(Self.format(duration))"
         }
+        inlineTimelineView.onBookmarkSelectionChange = { [weak self] bookmarkID in
+            self?.selectedBookmarkID = bookmarkID
+        }
+        inlineTimelineView.onBookmarkDragBegan = { [weak self] bookmarkID in
+            guard let self else { return }
+            self.selectedBookmarkID = bookmarkID
+            self.wasPlayingBeforeBookmarkDrag = self.engine.currentPlayer().rate != 0
+            if self.wasPlayingBeforeBookmarkDrag {
+                self.engine.pause()
+            }
+            self.engine.beginScrubbing()
+        }
+        inlineTimelineView.onBookmarkDragChanged = { [weak self] bookmarkID, seconds in
+            self?.handleBookmarkMarkerDrag(bookmarkID: bookmarkID, seconds: seconds, shouldCommit: false)
+        }
+        inlineTimelineView.onBookmarkDragEnded = { [weak self] bookmarkID, seconds in
+            self?.handleBookmarkMarkerDrag(bookmarkID: bookmarkID, seconds: seconds, shouldCommit: true)
+        }
 
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -666,6 +721,16 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func installBookmarkObserver() {
+        bookmarkChangeObserver = NotificationCenter.default.addObserver(
+            forName: .bookmarkStoreDidChange,
+            object: bookmarkStore,
+            queue: .main
+        ) { [weak self] _ in
+            self?.synchronizeCurrentClipBookmarks()
+        }
+    }
+
     private func handleKey(event: NSEvent) {
         if event.modifierFlags.contains(.command), event.keyCode == 12 {
             persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
@@ -674,6 +739,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let isShift = event.modifierFlags.contains(.shift)
+        let isOption = event.modifierFlags.contains(.option)
         switch event.keyCode {
         case 53:
             closePreviewWindow()
@@ -697,6 +763,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             if isShift {
                 engine.handle(command: .seekFrame(delta: 1))
                 persistCurrentClipPlaybackStateIfNeeded()
+            } else if isOption {
+                jumpToAdjacentBookmark(direction: 1)
             } else {
                 onBookmarkNavigationRequested?(-1)
             }
@@ -704,6 +772,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             if isShift {
                 engine.handle(command: .seekFrame(delta: -1))
                 persistCurrentClipPlaybackStateIfNeeded()
+            } else if isOption {
+                jumpToAdjacentBookmark(direction: -1)
             } else {
                 onBookmarkNavigationRequested?(1)
             }
@@ -748,6 +818,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     private func clearLoadedVideoState() {
         currentVideoURL = nil
+        synchronizeCurrentClipBookmarks()
+        selectedBookmarkID = nil
         lastKnownDuration = 0
         lastPersistedPlaybackPlayhead = nil
         lastPlaybackPersistenceUptime = 0
@@ -869,6 +941,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         defaults.set(raw, forKey: Self.clipRotationDefaultsKey)
     }
 
+    private static func storeLastOpenedVideoURL(_ url: URL, defaults: UserDefaults = .standard) {
+        defaults.set(url.standardizedFileURL.path, forKey: lastOpenedVideoPathDefaultsKey)
+    }
+
     private func storedSelection(for url: URL) -> ClipSelection? {
         loadClipSelectionStoreCacheIfNeeded()
         return clipSelectionStoreCache[url.path]
@@ -975,15 +1051,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private func applyPendingBookmarkNavigationIfPossible(duration: PlaybackSeconds) {
         guard duration > 0, let pendingBookmarkNavigationTime else { return }
         self.pendingBookmarkNavigationTime = nil
-        let clampedTime = min(max(pendingBookmarkNavigationTime, 0), duration)
-        engine.handle(command: .seekTo(seconds: clampedTime))
-        inlineTimelineView.currentPosition = clampedTime
-        if isAutoplayEnabled {
-            engine.play()
-        } else {
-            engine.pause()
-        }
-        persistCurrentClipPlaybackStateIfNeeded()
+        seekToBookmarkTime(pendingBookmarkNavigationTime, duration: duration)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -1018,9 +1086,69 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let duration = engine.currentDurationSeconds()
-        let clampedTime = duration > 0
-            ? min(max(bookmark.timeSeconds, 0), duration)
-            : max(bookmark.timeSeconds, 0)
+        seekToBookmarkTime(bookmark.timeSeconds, duration: duration, statusMessage: "Jumped to Bookmark")
+    }
+
+    private func synchronizeCurrentClipBookmarks() {
+        guard let currentVideoURL else {
+            currentClipBookmarks = []
+            inlineTimelineView.bookmarks = []
+            inlineTimelineView.selectedBookmarkID = nil
+            return
+        }
+
+        let normalizedVideoPath = currentVideoURL.standardizedFileURL.path
+        currentClipBookmarks = bookmarkStore.allBookmarks(visibility: .all)
+            .lazy
+            .filter { $0.videoPath == normalizedVideoPath }
+            .map { BookmarkTimelineMarker(id: $0.id, timeSeconds: $0.timeSeconds) }
+            .filter { $0.timeSeconds.isFinite && $0.timeSeconds >= 0 }
+            .sorted()
+        if let selectedBookmarkID,
+           !currentClipBookmarks.contains(where: { $0.id == selectedBookmarkID }) {
+            self.selectedBookmarkID = nil
+        }
+        inlineTimelineView.bookmarks = currentClipBookmarks
+        inlineTimelineView.selectedBookmarkID = selectedBookmarkID
+    }
+
+    private func jumpToAdjacentBookmark(direction: Int) {
+        let currentClipBookmarkTimes = currentClipBookmarks.map(\.timeSeconds)
+        guard !currentClipBookmarkTimes.isEmpty else {
+            playerView.flashStatusMessage("No Bookmarks")
+            return
+        }
+
+        let currentPosition = engine.currentTimeSeconds()
+        let epsilon: PlaybackSeconds = 0.05
+        let targetTime: PlaybackSeconds?
+
+        if direction < 0 {
+            targetTime = currentClipBookmarkTimes.last(where: { $0 < (currentPosition - epsilon) })
+        } else {
+            targetTime = currentClipBookmarkTimes.first(where: { $0 > (currentPosition + epsilon) })
+        }
+
+        guard let targetTime else {
+            playerView.flashStatusMessage(direction < 0 ? "No Previous Bookmark" : "No Next Bookmark")
+            return
+        }
+
+        seekToBookmarkTime(
+            targetTime,
+            statusMessage: direction < 0 ? "Previous Bookmark" : "Next Bookmark"
+        )
+    }
+
+    private func seekToBookmarkTime(
+        _ timeSeconds: PlaybackSeconds,
+        duration: PlaybackSeconds? = nil,
+        statusMessage: String? = nil
+    ) {
+        let currentDuration = duration ?? engine.currentDurationSeconds()
+        let clampedTime = currentDuration > 0
+            ? min(max(timeSeconds, 0), currentDuration)
+            : max(timeSeconds, 0)
         engine.handle(command: .seekTo(seconds: clampedTime))
         inlineTimelineView.currentPosition = clampedTime
         if isAutoplayEnabled {
@@ -1029,11 +1157,61 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             engine.pause()
         }
         persistCurrentClipPlaybackStateIfNeeded()
-        playerView.flashStatusMessage("Jumped to Bookmark")
+        if let statusMessage {
+            playerView.flashStatusMessage(statusMessage)
+        }
+    }
+
+    private func handleBookmarkMarkerDrag(
+        bookmarkID: BookmarkID,
+        seconds: PlaybackSeconds,
+        shouldCommit: Bool
+    ) {
+        let duration = max(engine.currentDurationSeconds(), 0)
+        let clampedTime = duration > 0
+            ? min(max(seconds, 0), duration)
+            : max(seconds, 0)
+        updateBookmarkMarkerTime(bookmarkID: bookmarkID, timeSeconds: clampedTime)
+        inlineTimelineView.currentPosition = clampedTime
+        timeLabel.stringValue = "\(Self.format(clampedTime)) / \(Self.format(duration))"
+
+        if shouldCommit {
+            engine.endScrubbing(at: clampedTime)
+            if wasPlayingBeforeBookmarkDrag {
+                engine.play()
+            } else {
+                engine.pause()
+            }
+            wasPlayingBeforeBookmarkDrag = false
+            bookmarkStore.updateTimeSeconds(
+                for: bookmarkID,
+                timeSeconds: clampedTime,
+                syncThumbnailToBookmarkTime: true
+            )
+            persistCurrentClipPlaybackStateIfNeeded()
+            playerView.flashStatusMessage("Bookmark Updated")
+            return
+        }
+
+        engine.scrub(to: clampedTime)
+    }
+
+    private func updateBookmarkMarkerTime(bookmarkID: BookmarkID, timeSeconds: PlaybackSeconds) {
+        guard let bookmarkIndex = currentClipBookmarks.firstIndex(where: { $0.id == bookmarkID }) else {
+            return
+        }
+        currentClipBookmarks[bookmarkIndex] = BookmarkTimelineMarker(id: bookmarkID, timeSeconds: timeSeconds)
+        currentClipBookmarks.sort()
+        inlineTimelineView.bookmarks = currentClipBookmarks
+        inlineTimelineView.selectedBookmarkID = selectedBookmarkID
     }
 
     private func updateTimelinePositionIfNeeded(_ positionSeconds: PlaybackSeconds) {
-        guard !inlineTimelineView.isDraggingPlayhead && !inlineTimelineView.isDraggingSelectionHandle else {
+        guard
+            !inlineTimelineView.isDraggingPlayhead,
+            !inlineTimelineView.isDraggingSelectionHandle,
+            !inlineTimelineView.isDraggingBookmarkMarker
+        else {
             return
         }
         let now = ProcessInfo.processInfo.systemUptime
@@ -1065,7 +1243,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         duration: PlaybackSeconds
     ) {
         guard currentVideoURL != nil else { return }
-        guard !inlineTimelineView.isDraggingPlayhead && !inlineTimelineView.isDraggingSelectionHandle else {
+        guard
+            !inlineTimelineView.isDraggingPlayhead,
+            !inlineTimelineView.isDraggingSelectionHandle,
+            !inlineTimelineView.isDraggingBookmarkMarker
+        else {
             return
         }
 
@@ -1377,10 +1559,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 }
 
 private final class InlineSelectionTimelineView: NSView {
-    enum DragTarget {
+    enum DragTarget: Equatable {
         case playhead
         case startHandle
         case endHandle
+        case bookmark(BookmarkID)
     }
 
     private struct PendingPrecisionActivation {
@@ -1409,6 +1592,20 @@ private final class InlineSelectionTimelineView: NSView {
         didSet { updateLayerFrames() }
     }
 
+    var bookmarks: [BookmarkTimelineMarker] = [] {
+        didSet {
+            syncBookmarkMarkerLayers()
+            updateLayerFrames()
+        }
+    }
+
+    var selectedBookmarkID: BookmarkID? {
+        didSet {
+            updateAppearance()
+            updateLayerFrames()
+        }
+    }
+
     var onSeekChanged: ((PlaybackSeconds) -> Void)?
     var onSeekEnded: ((PlaybackSeconds) -> Void)?
     var onSeekBegan: (() -> Void)?
@@ -1417,6 +1614,10 @@ private final class InlineSelectionTimelineView: NSView {
     var onSelectionPreviewBegan: (() -> Void)?
     var onSelectionPreviewChanged: ((PlaybackSeconds) -> Void)?
     var onSelectionPreviewEnded: (() -> Void)?
+    var onBookmarkSelectionChange: ((BookmarkID?) -> Void)?
+    var onBookmarkDragBegan: ((BookmarkID) -> Void)?
+    var onBookmarkDragChanged: ((BookmarkID, PlaybackSeconds) -> Void)?
+    var onBookmarkDragEnded: ((BookmarkID, PlaybackSeconds) -> Void)?
 
     var isDraggingPlayhead: Bool {
         dragTarget == .playhead
@@ -1426,6 +1627,13 @@ private final class InlineSelectionTimelineView: NSView {
         dragTarget == .startHandle || dragTarget == .endHandle
     }
 
+    var isDraggingBookmarkMarker: Bool {
+        if case .bookmark = dragTarget {
+            return true
+        }
+        return false
+    }
+
     override var isFlipped: Bool {
         true
     }
@@ -1433,6 +1641,7 @@ private final class InlineSelectionTimelineView: NSView {
     var isControlEnabled: Bool = true {
         didSet {
             updateAppearance()
+            window?.invalidateCursorRects(for: self)
         }
     }
 
@@ -1445,6 +1654,7 @@ private final class InlineSelectionTimelineView: NSView {
     private let playheadLayer = CALayer()
     private let startHandleLayer = CALayer()
     private let endHandleLayer = CALayer()
+    private var bookmarkMarkerLayers: [CALayer] = []
     private let precisionActivationDelay: TimeInterval = 1.0
     private let precisionActivationMovementTolerance: CGFloat = 6
     private let precisionZoomFactor: PlaybackSeconds = 10
@@ -1467,15 +1677,44 @@ private final class InlineSelectionTimelineView: NSView {
         updateLayerFrames()
     }
 
+    override func resetCursorRects() {
+        super.resetCursorRects()
+
+        guard isControlEnabled else { return }
+
+        for bookmark in bookmarks {
+            addCursorRect(bookmarkHitRect(for: bookmark), cursor: .pointingHand)
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard isControlEnabled else { return }
         let point = convert(event.locationInWindow, from: nil)
         clearPrecisionInteractionState()
-        dragTarget = resolvedDragTarget(for: point)
-        if dragTarget == .playhead {
+        let resolvedTarget = resolvedDragTarget(for: point)
+
+        if case let .bookmark(bookmarkID) = resolvedTarget, selectedBookmarkID != bookmarkID {
+            selectedBookmarkID = bookmarkID
+            onBookmarkSelectionChange?(bookmarkID)
+            dragTarget = nil
+            return
+        }
+
+        if !isBookmarkTarget(resolvedTarget), selectedBookmarkID != nil {
+            selectedBookmarkID = nil
+            onBookmarkSelectionChange?(nil)
+        }
+
+        dragTarget = resolvedTarget
+        switch resolvedTarget {
+        case .playhead:
             onSeekBegan?()
-        } else {
+        case .startHandle, .endHandle:
             onSelectionPreviewBegan?()
+        case let .bookmark(bookmarkID):
+            selectedBookmarkID = bookmarkID
+            onBookmarkSelectionChange?(bookmarkID)
+            onBookmarkDragBegan?(bookmarkID)
         }
         beginPendingPrecisionActivation(at: point)
         updateDrag(with: point)
@@ -1492,7 +1731,7 @@ private final class InlineSelectionTimelineView: NSView {
         guard dragTarget != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
         updateDrag(with: point, isFinal: true)
-        if dragTarget != .playhead {
+        if dragTarget == .startHandle || dragTarget == .endHandle {
             clearPrecisionInteractionState()
             onSelectionPreviewEnded?()
         } else {
@@ -1544,9 +1783,19 @@ private final class InlineSelectionTimelineView: NSView {
         endHandleLayer.borderColor = NSColor(calibratedWhite: 0.2, alpha: isControlEnabled ? (isPrecisionActive ? 0.35 : 0.2) : 0.1).cgColor
         startHandleLayer.borderWidth = isPrecisionActive ? 1.5 : 1
         endHandleLayer.borderWidth = isPrecisionActive ? 1.5 : 1
+        for (index, markerLayer) in bookmarkMarkerLayers.enumerated() {
+            let bookmark = bookmarks[index]
+            let isSelected = bookmark.id == selectedBookmarkID
+            let markerColor = isSelected
+                ? NSColor.controlAccentColor.withAlphaComponent(isControlEnabled ? 0.95 : 0.4).cgColor
+                : NSColor.white.withAlphaComponent(isControlEnabled ? 0.78 : 0.35).cgColor
+            markerLayer.backgroundColor = markerColor
+            markerLayer.cornerRadius = isSelected ? 1.5 : 1
+        }
     }
 
     private func updateLayerFrames() {
+        syncBookmarkMarkerLayers()
         let trackRect = self.trackRect
         let visibleRange = timelineVisibleRange()
         trackLayer.frame = CGRect(x: trackRect.minX, y: trackRect.minY, width: max(trackRect.width, 0), height: trackRect.height)
@@ -1577,7 +1826,20 @@ private final class InlineSelectionTimelineView: NSView {
         playheadLayer.isHidden = !isMarkerVisible(currentPosition, in: visibleRange, marker: .playhead)
         startHandleLayer.isHidden = !isMarkerVisible(selectionStart, in: visibleRange, marker: .startHandle)
         endHandleLayer.isHidden = !isMarkerVisible(selectionEnd, in: visibleRange, marker: .endHandle)
+        let epsilon: PlaybackSeconds = 0.0001
+        for (index, markerLayer) in bookmarkMarkerLayers.enumerated() {
+            let bookmark = bookmarks[index]
+            let isVisible = bookmark.timeSeconds >= (visibleRange.lowerBound - epsilon)
+                && bookmark.timeSeconds <= (visibleRange.upperBound + epsilon)
+            markerLayer.isHidden = !isVisible
+            guard isVisible else {
+                markerLayer.frame = .zero
+                continue
+            }
+            markerLayer.frame = bookmarkRect(for: bookmark)
+        }
         updateLayerOrdering()
+        window?.invalidateCursorRects(for: self)
     }
 
     private var trackRect: CGRect {
@@ -1617,6 +1879,22 @@ private final class InlineSelectionTimelineView: NSView {
         CGRect(x: x - 8, y: trackRect.midY - 14, width: 16, height: 28)
     }
 
+    private func bookmarkRect(for bookmark: BookmarkTimelineMarker) -> CGRect {
+        let isSelected = bookmark.id == selectedBookmarkID
+        let width: CGFloat = isSelected ? 5 : 4
+        let height: CGFloat = isSelected ? 11 : 9
+        return CGRect(
+            x: xPosition(for: bookmark.timeSeconds) - (width / 2),
+            y: max(trackRect.minY - height - 1, 1),
+            width: width,
+            height: height
+        )
+    }
+
+    private func bookmarkHitRect(for bookmark: BookmarkTimelineMarker) -> CGRect {
+        bookmarkRect(for: bookmark).insetBy(dx: -8, dy: -7)
+    }
+
     private func playheadRect(at x: CGFloat) -> CGRect {
         CGRect(x: x - 4, y: trackRect.midY - 10, width: 8, height: 20)
     }
@@ -1629,6 +1907,8 @@ private final class InlineSelectionTimelineView: NSView {
             return selectionStart
         case .endHandle:
             return selectionEnd
+        case let .bookmark(bookmarkID):
+            return bookmarks.first(where: { $0.id == bookmarkID })?.timeSeconds ?? currentPosition
         }
     }
 
@@ -1737,11 +2017,23 @@ private final class InlineSelectionTimelineView: NSView {
         let referenceMarkers: [(target: DragTarget, value: PlaybackSeconds)]
         switch dragTarget {
         case .playhead:
-            referenceMarkers = [(.startHandle, selectionStart), (.endHandle, selectionEnd)]
+            referenceMarkers = [(.startHandle, selectionStart), (.endHandle, selectionEnd)] + bookmarks.map {
+                (.bookmark($0.id), $0.timeSeconds)
+            }
         case .startHandle:
-            referenceMarkers = [(.playhead, currentPosition), (.endHandle, selectionEnd)]
+            referenceMarkers = [(.playhead, currentPosition), (.endHandle, selectionEnd)] + bookmarks.map {
+                (.bookmark($0.id), $0.timeSeconds)
+            }
         case .endHandle:
-            referenceMarkers = [(.playhead, currentPosition), (.startHandle, selectionStart)]
+            referenceMarkers = [(.playhead, currentPosition), (.startHandle, selectionStart)] + bookmarks.map {
+                (.bookmark($0.id), $0.timeSeconds)
+            }
+        case let .bookmark(bookmarkID):
+            referenceMarkers = [(.playhead, currentPosition), (.startHandle, selectionStart), (.endHandle, selectionEnd)]
+                + bookmarks.compactMap { bookmark in
+                    guard bookmark.id != bookmarkID else { return nil }
+                    return (.bookmark(bookmark.id), bookmark.timeSeconds)
+                }
         }
 
         return referenceMarkers.min { lhs, rhs in
@@ -1752,9 +2044,39 @@ private final class InlineSelectionTimelineView: NSView {
     private func updateLayerOrdering() {
         trackLayer.zPosition = 0
         selectionLayer.zPosition = 1
+        for (index, markerLayer) in bookmarkMarkerLayers.enumerated() {
+            let bookmark = bookmarks[index]
+            markerLayer.zPosition = bookmark.id == selectedBookmarkID ? 4 : 2
+        }
         playheadLayer.zPosition = 3
         startHandleLayer.zPosition = dragTarget == .startHandle ? 4 : 2
         endHandleLayer.zPosition = dragTarget == .endHandle ? 4 : 2
+    }
+
+    private func syncBookmarkMarkerLayers() {
+        guard let rootLayer = layer else { return }
+
+        while bookmarkMarkerLayers.count < bookmarks.count {
+            let markerLayer = CALayer()
+            markerLayer.cornerRadius = 1
+            markerLayer.actions = [
+                "position": NSNull(),
+                "bounds": NSNull(),
+                "frame": NSNull(),
+                "backgroundColor": NSNull(),
+                "cornerRadius": NSNull(),
+                "hidden": NSNull()
+            ]
+            rootLayer.addSublayer(markerLayer)
+            bookmarkMarkerLayers.append(markerLayer)
+        }
+
+        while bookmarkMarkerLayers.count > bookmarks.count {
+            let markerLayer = bookmarkMarkerLayers.removeLast()
+            markerLayer.removeFromSuperlayer()
+        }
+
+        updateAppearance()
     }
 
     private func isMarkerVisible(
@@ -1776,6 +2098,12 @@ private final class InlineSelectionTimelineView: NSView {
     }
 
     private func resolvedDragTarget(for point: CGPoint) -> DragTarget {
+        if let selectedBookmarkID,
+           let selectedBookmark = bookmarks.first(where: { $0.id == selectedBookmarkID }),
+           bookmarkHitRect(for: selectedBookmark).contains(point) {
+            return .bookmark(selectedBookmarkID)
+        }
+
         if handleRect(at: startX).insetBy(dx: -6, dy: -4).contains(point) {
             return .startHandle
         }
@@ -1786,6 +2114,10 @@ private final class InlineSelectionTimelineView: NSView {
 
         if playheadRect(at: xPosition(for: currentPosition)).insetBy(dx: -5, dy: -4).contains(point) {
             return .playhead
+        }
+
+        if let bookmark = bookmarks.first(where: { bookmarkHitRect(for: $0).contains(point) }) {
+            return .bookmark(bookmark.id)
         }
 
         return .playhead
@@ -1823,9 +2155,23 @@ private final class InlineSelectionTimelineView: NSView {
             } else {
                 onSelectionChange?(selectionStart, selectionEnd)
             }
+        case let .bookmark(bookmarkID):
+            updateLayerFrames()
+            if isFinal {
+                onBookmarkDragEnded?(bookmarkID, proposedSeconds)
+            } else {
+                onBookmarkDragChanged?(bookmarkID, proposedSeconds)
+            }
         case .none:
             break
         }
+    }
+
+    private func isBookmarkTarget(_ target: DragTarget) -> Bool {
+        if case .bookmark = target {
+            return true
+        }
+        return false
     }
 }
 

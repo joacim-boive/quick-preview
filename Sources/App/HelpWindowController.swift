@@ -63,6 +63,9 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeSectionTitle("Precision Timeline & Looping"))
         stack.addArrangedSubview(makeBulletList([
             "Drag the left and right handles to define a loop range.",
+            "Thin markers above the timeline show every saved bookmark for the current clip, including when you opened the clip from a bookmark.",
+            "Click a bookmark marker once to select it, then drag it to retime that bookmark and refresh its saved thumbnail frame.",
+            "Bookmark marker drags preview live in the player and save immediately when you release.",
             "Press L to toggle loop on/off for the current clip.",
             "Press Cmd + Shift + P to toggle autoplay for newly opened clips and bookmark jumps.",
             "Loop preference is remembered per clip.",
@@ -161,6 +164,8 @@ final class HelpWindowController: NSWindowController {
             ("Right Arrow", "Seek forward (fine)"),
             ("Shift + Left Arrow", "Seek backward (coarse)"),
             ("Shift + Right Arrow", "Seek forward (coarse)"),
+            ("Option + Up Arrow", "Jump to the next bookmark on the current clip"),
+            ("Option + Down Arrow", "Jump to the previous bookmark on the current clip"),
             ("Up / Down Arrow", "Move through bookmarks when the bookmark manager is open"),
             ("Shift + Down Arrow", "Step one frame backward"),
             ("Shift + Up Arrow", "Step one frame forward"),

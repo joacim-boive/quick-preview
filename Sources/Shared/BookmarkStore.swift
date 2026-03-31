@@ -145,6 +145,26 @@ struct Bookmark: Codable, Equatable {
             fileCreatedAt: fileCreatedAt
         )
     }
+
+    func withUpdatedTimeSeconds(
+        _ timeSeconds: PlaybackSeconds,
+        thumbnailTimeSeconds: PlaybackSeconds?,
+        updatedAt: Date = Date()
+    ) -> Bookmark {
+        Bookmark(
+            id: id,
+            videoPath: videoPath,
+            timeSeconds: timeSeconds,
+            thumbnailTimeSeconds: thumbnailTimeSeconds,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            tags: tags,
+            isProtected: isProtected,
+            isImported: isImported,
+            importedAt: importedAt,
+            fileCreatedAt: fileCreatedAt
+        )
+    }
 }
 
 enum BookmarkVisibility: Equatable {
@@ -420,6 +440,41 @@ final class BookmarkStore {
         }
 
         cache[index] = cache[index].withUpdatedThumbnailTimeSeconds(normalizedThumbnailTimeSeconds)
+        preparedBookmarks[id] = makePreparedBookmark(for: cache[index])
+        schedulePersist()
+        notifyDidChange()
+    }
+
+    func updateTimeSeconds(
+        for id: BookmarkID,
+        timeSeconds: PlaybackSeconds,
+        syncThumbnailToBookmarkTime: Bool = false
+    ) {
+        loadCacheIfNeeded()
+        guard let index = cache.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        guard timeSeconds.isFinite else {
+            return
+        }
+
+        let normalizedTimeSeconds = max(timeSeconds, 0)
+        let normalizedThumbnailTimeSeconds = syncThumbnailToBookmarkTime
+            ? nil
+            : cache[index].thumbnailTimeSeconds
+
+        guard
+            cache[index].timeSeconds != normalizedTimeSeconds
+                || cache[index].thumbnailTimeSeconds != normalizedThumbnailTimeSeconds
+        else {
+            return
+        }
+
+        cache[index] = cache[index].withUpdatedTimeSeconds(
+            normalizedTimeSeconds,
+            thumbnailTimeSeconds: normalizedThumbnailTimeSeconds
+        )
         preparedBookmarks[id] = makePreparedBookmark(for: cache[index])
         schedulePersist()
         notifyDidChange()
