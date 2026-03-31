@@ -49,7 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         shortcutHintText = BackgroundShortcutConfiguration.windowTitleHint
         startFinderSelectionMonitor()
         requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+            self?.restoreLastOpenedVideoIfPossible()
             self?.revealPlayerWindow(centerIfNeeded: true)
+            self?.restoreBookmarksWindowIfNeeded()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             self?.syncBackgroundShortcutServiceAfterLaunch()
@@ -58,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationWillTerminate(_ notification: Notification) {
         accessRefreshTask?.cancel()
+        bookmarksWindowController?.prepareForApplicationTermination()
         windowController?.closeCurrentVideoIfNeeded()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
@@ -416,7 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func showBookmarksWindow(selecting bookmark: Bookmark?) {
         let controller = ensureBookmarksWindowController()
         controller.setCurrentVideoURL(windowController?.loadedVideoURL())
-        controller.showWindow(nil)
+        controller.showAndTrackWindow()
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         if let bookmark {
@@ -1128,6 +1131,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.window?.makeKeyAndOrderFront(nil)
         controller.window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func restoreBookmarksWindowIfNeeded() {
+        guard BookmarksWindowController.shouldReopenOnLaunch() else {
+            return
+        }
+        showBookmarksWindow(selecting: nil)
+    }
+
+    @discardableResult
+    private func restoreLastOpenedVideoIfPossible() -> Bool {
+        let controller = ensureWindowController()
+        guard controller.loadedVideoURL() == nil else {
+            return false
+        }
+        guard let lastOpenedVideoURL = MainPlayerWindowController.storedLastOpenedVideoURL() else {
+            return false
+        }
+        guard FileManager.default.fileExists(atPath: lastOpenedVideoURL.path) else {
+            MainPlayerWindowController.clearStoredLastOpenedVideoURL()
+            return false
+        }
+        guard
+            protectedBookmarksSessionController.isUnlocked
+                || !bookmarkStore.hasProtectedBookmarks(for: lastOpenedVideoURL)
+        else {
+            return false
+        }
+
+        ignoreCurrentFinderSelection()
+        controller.openVideo(url: lastOpenedVideoURL, shouldRevealWindow: false)
+        return true
     }
 
     private var isMainWindowVisible: Bool {

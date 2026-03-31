@@ -31,6 +31,8 @@ macOS standalone video player focused on fast preview and loop workflows:
 
 - The main player timeline shows thin markers for every saved bookmark on the currently loaded clip.
 - Opening a clip from any bookmark still shows markers for the clip's other bookmarks right away.
+- Click a bookmark marker once to select it, then drag it to retime that bookmark.
+- Dragging a selected bookmark marker previews the new position live and saves the bookmark plus its thumbnail frame on release.
 
 ## Finder Selection Follow
 

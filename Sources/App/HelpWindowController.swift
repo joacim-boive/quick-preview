@@ -64,6 +64,8 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeBulletList([
             "Drag the left and right handles to define a loop range.",
             "Thin markers above the timeline show every saved bookmark for the current clip, including when you opened the clip from a bookmark.",
+            "Click a bookmark marker once to select it, then drag it to retime that bookmark and refresh its saved thumbnail frame.",
+            "Bookmark marker drags preview live in the player and save immediately when you release.",
             "Press L to toggle loop on/off for the current clip.",
             "Press Cmd + Shift + P to toggle autoplay for newly opened clips and bookmark jumps.",
             "Loop preference is remembered per clip.",

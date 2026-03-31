@@ -4,6 +4,9 @@ import Cocoa
 import UniformTypeIdentifiers
 
 final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
+    private static let reopenOnLaunchDefaultsKey = "reopenBookmarksWindowOnLaunch"
+    private static let windowFrameDefaultsKey = "bookmarksWindowFrame"
+
     private enum ColumnIdentifier {
         static let thumbnail = NSUserInterfaceItemIdentifier("thumbnail")
         static let time = NSUserInterfaceItemIdentifier("time")
@@ -50,6 +53,18 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private weak var activePreviewThumbnailCell: BookmarkThumbnailCellView?
     private var activeThumbnailPickerSheetController: BookmarkThumbnailPickerSheetController?
     private var pendingRevealHighlightBookmarkID: BookmarkID?
+    private var isPreparingForApplicationTermination = false
+
+    private struct SavedWindowFrame: Codable {
+        let originX: CGFloat
+        let originY: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+
+        var rect: NSRect {
+            NSRect(x: originX, y: originY, width: width, height: height)
+        }
+    }
 
     private static let importedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -90,6 +105,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 660, height: 420)
         super.init(window: window)
         window.delegate = self
+        restoreWindowFrameIfNeeded()
         configureUI(on: rootView)
         installObservers()
         installEscKeyMonitor()
@@ -153,7 +169,90 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         _ = notification
         dismissVisiblePreviewPanels()
         window?.makeFirstResponder(nil)
+        persistWindowFrameIfNeeded()
+        if !isPreparingForApplicationTermination {
+            Self.storeShouldReopenOnLaunch(false)
+        }
         onWindowClosed?()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        _ = notification
+        persistWindowFrameIfNeeded()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        _ = notification
+        persistWindowFrameIfNeeded()
+    }
+
+    func showAndTrackWindow() {
+        showWindow(nil)
+        Self.storeShouldReopenOnLaunch(true)
+    }
+
+    func prepareForApplicationTermination() {
+        isPreparingForApplicationTermination = true
+        persistWindowFrameIfNeeded()
+        Self.storeShouldReopenOnLaunch(window?.isVisible == true)
+    }
+
+    static func shouldReopenOnLaunch(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: reopenOnLaunchDefaultsKey)
+    }
+
+    private static func storeShouldReopenOnLaunch(
+        _ shouldReopen: Bool,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(shouldReopen, forKey: reopenOnLaunchDefaultsKey)
+    }
+
+    private func persistWindowFrameIfNeeded(defaults: UserDefaults = .standard) {
+        guard let savedFrame = currentPersistableWindowFrame() else { return }
+        guard let data = try? JSONEncoder().encode(savedFrame) else { return }
+        defaults.set(data, forKey: Self.windowFrameDefaultsKey)
+    }
+
+    private func currentPersistableWindowFrame() -> SavedWindowFrame? {
+        guard let window else { return nil }
+        let frame = window.frame
+        guard frame.width.isFinite, frame.height.isFinite, frame.width > 0, frame.height > 0 else {
+            return nil
+        }
+        return SavedWindowFrame(
+            originX: frame.origin.x,
+            originY: frame.origin.y,
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    private func restoreWindowFrameIfNeeded(defaults: UserDefaults = .standard) {
+        guard
+            let window,
+            let data = defaults.data(forKey: Self.windowFrameDefaultsKey),
+            let savedFrame = try? JSONDecoder().decode(SavedWindowFrame.self, from: data)
+        else {
+            return
+        }
+
+        let minimumSize = window.minSize
+        var frame = savedFrame.rect
+        frame.size.width = max(frame.width, minimumSize.width)
+        frame.size.height = max(frame.height, minimumSize.height)
+
+        if let screen = window.screen ?? NSScreen.main {
+            let visibleFrame = screen.visibleFrame
+            let maxWidth = max(visibleFrame.width, minimumSize.width)
+            let maxHeight = max(visibleFrame.height, minimumSize.height)
+            frame.size.width = min(frame.width, maxWidth)
+            frame.size.height = min(frame.height, maxHeight)
+            frame.origin.x = min(max(frame.origin.x, visibleFrame.minX), visibleFrame.maxX - frame.width)
+            frame.origin.y = min(max(frame.origin.y, visibleFrame.minY), visibleFrame.maxY - frame.height)
+        }
+
+        window.setFrame(frame, display: false)
     }
 
     private func configureUI(on rootView: BookmarkDropView) {
