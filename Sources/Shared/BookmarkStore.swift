@@ -19,6 +19,7 @@ struct Bookmark: Codable, Equatable {
     let id: BookmarkID
     let videoPath: String
     let timeSeconds: PlaybackSeconds
+    let thumbnailTimeSeconds: PlaybackSeconds?
     let createdAt: Date
     let updatedAt: Date
     let tags: [String]
@@ -31,6 +32,7 @@ struct Bookmark: Codable, Equatable {
         case id
         case videoPath
         case timeSeconds
+        case thumbnailTimeSeconds
         case createdAt
         case updatedAt
         case tags
@@ -44,6 +46,7 @@ struct Bookmark: Codable, Equatable {
         id: BookmarkID,
         videoPath: String,
         timeSeconds: PlaybackSeconds,
+        thumbnailTimeSeconds: PlaybackSeconds? = nil,
         createdAt: Date,
         updatedAt: Date,
         tags: [String],
@@ -55,6 +58,7 @@ struct Bookmark: Codable, Equatable {
         self.id = id
         self.videoPath = videoPath
         self.timeSeconds = timeSeconds
+        self.thumbnailTimeSeconds = thumbnailTimeSeconds
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.tags = tags
@@ -69,6 +73,7 @@ struct Bookmark: Codable, Equatable {
         id = try container.decode(BookmarkID.self, forKey: .id)
         videoPath = try container.decode(String.self, forKey: .videoPath)
         timeSeconds = try container.decode(PlaybackSeconds.self, forKey: .timeSeconds)
+        thumbnailTimeSeconds = try container.decodeIfPresent(PlaybackSeconds.self, forKey: .thumbnailTimeSeconds)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         tags = try container.decode([String].self, forKey: .tags)
@@ -86,11 +91,16 @@ struct Bookmark: Codable, Equatable {
         (videoPath as NSString).lastPathComponent
     }
 
+    var effectiveThumbnailTimeSeconds: PlaybackSeconds {
+        thumbnailTimeSeconds ?? timeSeconds
+    }
+
     func withUpdatedTags(_ tags: [String], updatedAt: Date = Date()) -> Bookmark {
         Bookmark(
             id: id,
             videoPath: videoPath,
             timeSeconds: timeSeconds,
+            thumbnailTimeSeconds: thumbnailTimeSeconds,
             createdAt: createdAt,
             updatedAt: updatedAt,
             tags: tags,
@@ -106,6 +116,26 @@ struct Bookmark: Codable, Equatable {
             id: id,
             videoPath: videoPath,
             timeSeconds: timeSeconds,
+            thumbnailTimeSeconds: thumbnailTimeSeconds,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            tags: tags,
+            isProtected: isProtected,
+            isImported: isImported,
+            importedAt: importedAt,
+            fileCreatedAt: fileCreatedAt
+        )
+    }
+
+    func withUpdatedThumbnailTimeSeconds(
+        _ thumbnailTimeSeconds: PlaybackSeconds?,
+        updatedAt: Date = Date()
+    ) -> Bookmark {
+        Bookmark(
+            id: id,
+            videoPath: videoPath,
+            timeSeconds: timeSeconds,
+            thumbnailTimeSeconds: thumbnailTimeSeconds,
             createdAt: createdAt,
             updatedAt: updatedAt,
             tags: tags,
@@ -199,6 +229,7 @@ final class BookmarkStore {
             id: BookmarkID(),
             videoPath: normalizedURL.path,
             timeSeconds: max(timeSeconds, 0),
+            thumbnailTimeSeconds: nil,
             createdAt: Date(),
             updatedAt: Date(),
             tags: Self.sanitizedTags(tags),
@@ -221,6 +252,7 @@ final class BookmarkStore {
                 id: BookmarkID(),
                 videoPath: normalizedURL.path,
                 timeSeconds: 0,
+                thumbnailTimeSeconds: nil,
                 createdAt: importedAt,
                 updatedAt: importedAt,
                 tags: Self.sanitizedTags(["imported"]),
@@ -270,6 +302,28 @@ final class BookmarkStore {
             return
         }
         cache[index] = cache[index].withUpdatedProtection(isProtected)
+        schedulePersist()
+        notifyDidChange()
+    }
+
+    func updateThumbnailTimeSeconds(for id: BookmarkID, thumbnailTimeSeconds: PlaybackSeconds?) {
+        loadCacheIfNeeded()
+        guard let index = cache.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let normalizedThumbnailTimeSeconds: PlaybackSeconds? = {
+            guard let thumbnailTimeSeconds else { return nil }
+            guard thumbnailTimeSeconds.isFinite else { return nil }
+            return max(thumbnailTimeSeconds, 0)
+        }()
+
+        guard cache[index].thumbnailTimeSeconds != normalizedThumbnailTimeSeconds else {
+            return
+        }
+
+        cache[index] = cache[index].withUpdatedThumbnailTimeSeconds(normalizedThumbnailTimeSeconds)
+        preparedBookmarks[id] = makePreparedBookmark(for: cache[index])
         schedulePersist()
         notifyDidChange()
     }

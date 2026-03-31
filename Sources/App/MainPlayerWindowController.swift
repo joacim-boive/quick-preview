@@ -23,10 +23,14 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var isLoopEnabled = true
     private var hasStoredSelectionForCurrentClip = false
     private var lastKnownDuration: PlaybackSeconds = 0
+    private var lastPersistedPlaybackPlayhead: PlaybackSeconds?
+    private var lastPlaybackPersistenceUptime: TimeInterval = 0
     private var lastRenderedPositionWholeSeconds = -1
     private var lastRenderedDurationWholeSeconds = -1
     private var lastTimelineUpdateUptime: TimeInterval = 0
     private let timelineRefreshInterval: TimeInterval = 1.0 / 30.0
+    private let playbackCheckpointInterval: TimeInterval = 1.0
+    private let playbackCheckpointMinimumDelta: PlaybackSeconds = 0.75
     private var wasPlayingBeforePlayheadDrag = false
     private var wasPlayingBeforeSelectionPreview = false
     private var selectionPreviewReturnPosition: PlaybackSeconds?
@@ -136,6 +140,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.attach(to: normalizedURL, autoplay: true)
         currentVideoURL = normalizedURL
         lastKnownDuration = 0
+        lastPersistedPlaybackPlayhead = nil
+        lastPlaybackPersistenceUptime = 0
         lastRenderedPositionWholeSeconds = -1
         lastRenderedDurationWholeSeconds = -1
         lastTimelineUpdateUptime = 0
@@ -598,6 +604,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             }
             self.updateTimelinePositionIfNeeded(position.seconds)
             self.updateTimeLabelIfNeeded(position.seconds, duration: position.duration)
+            self.checkpointPlaybackStateIfNeeded(
+                positionSeconds: position.seconds,
+                duration: position.duration
+            )
         }
         engine.onLoopModeUpdate = { [weak self] mode in
             guard let self else { return }
@@ -635,18 +645,22 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         case 123:
             let amount = isShift ? engine.coarseStepAmount() : engine.fineStepAmount()
             engine.handle(command: .seekBy(seconds: -amount))
+            persistCurrentClipPlaybackStateIfNeeded()
         case 124:
             let amount = isShift ? engine.coarseStepAmount() : engine.fineStepAmount()
             engine.handle(command: .seekBy(seconds: amount))
+            persistCurrentClipPlaybackStateIfNeeded()
         case 126:
             if isShift {
                 engine.handle(command: .seekFrame(delta: 1))
+                persistCurrentClipPlaybackStateIfNeeded()
             } else {
                 onBookmarkNavigationRequested?(-1)
             }
         case 125:
             if isShift {
                 engine.handle(command: .seekFrame(delta: -1))
+                persistCurrentClipPlaybackStateIfNeeded()
             } else {
                 onBookmarkNavigationRequested?(1)
             }
@@ -659,6 +673,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         guard engine.currentPlayer().currentItem != nil else { return }
         let wasPlaying = engine.currentPlayer().rate != 0
         engine.handle(command: .togglePlayPause)
+        persistCurrentClipPlaybackStateIfNeeded()
         let symbolName = wasPlaying ? "pause.fill" : "play.fill"
         playerView.flashPlaybackIndicator(symbolName: symbolName)
     }
@@ -691,6 +706,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private func clearLoadedVideoState() {
         currentVideoURL = nil
         lastKnownDuration = 0
+        lastPersistedPlaybackPlayhead = nil
+        lastPlaybackPersistenceUptime = 0
         lastRenderedPositionWholeSeconds = -1
         lastRenderedDurationWholeSeconds = -1
         lastTimelineUpdateUptime = 0
@@ -986,6 +1003,27 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         timeLabel.stringValue = "\(Self.format(positionSeconds)) / \(Self.format(duration))"
     }
 
+    private func checkpointPlaybackStateIfNeeded(
+        positionSeconds: PlaybackSeconds,
+        duration: PlaybackSeconds
+    ) {
+        guard currentVideoURL != nil else { return }
+        guard !inlineTimelineView.isDraggingPlayhead && !inlineTimelineView.isDraggingSelectionHandle else {
+            return
+        }
+
+        let clampedPosition = duration > 0
+            ? min(max(positionSeconds, 0), duration)
+            : max(positionSeconds, 0)
+        let intervalElapsed = (ProcessInfo.processInfo.systemUptime - lastPlaybackPersistenceUptime) >= playbackCheckpointInterval
+        let movedEnough = lastPersistedPlaybackPlayhead.map {
+            abs(clampedPosition - $0) >= playbackCheckpointMinimumDelta
+        } ?? true
+
+        guard intervalElapsed && movedEnough else { return }
+        persistCurrentClipPlaybackStateIfNeeded()
+    }
+
     private static func format(_ seconds: PlaybackSeconds) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "00:00" }
         let whole = Int(seconds.rounded(.down))
@@ -1081,6 +1119,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             isPlaying: engine.currentPlayer().rate != 0,
             windowFrame: currentPersistableWindowFrame()
         )
+        lastPersistedPlaybackPlayhead = state.playhead
+        lastPlaybackPersistenceUptime = ProcessInfo.processInfo.systemUptime
         storeClipPlaybackState(state, for: currentVideoURL)
         if flushImmediately {
             flushPendingPersistedStateWrites(blocking: false)

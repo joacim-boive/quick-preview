@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationWillTerminate(_ notification: Notification) {
         accessRefreshTask?.cancel()
+        windowController?.closeCurrentVideoIfNeeded()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
         finderSelectionMonitorTimer?.cancel()
