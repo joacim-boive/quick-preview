@@ -157,6 +157,31 @@ extension Notification.Name {
     static let bookmarkStoreDidChange = Notification.Name("BookmarkStoreDidChange")
 }
 
+enum ImportedMediaDuplicateResolution {
+    case replace
+    case skip
+}
+
+struct ImportedMediaDuplicate: Equatable {
+    let videoURL: URL
+    let normalizedVideoPath: String
+    let existingBookmarkID: BookmarkID
+}
+
+struct ImportedMediaImportPlan: Equatable {
+    let newMedia: [URL]
+    let duplicates: [ImportedMediaDuplicate]
+
+    var isEmpty: Bool {
+        newMedia.isEmpty && duplicates.isEmpty
+    }
+}
+
+struct ImportedMediaImportResult: Equatable {
+    let affectedBookmarkIDs: [BookmarkID]
+    let firstDuplicateBookmarkID: BookmarkID?
+}
+
 final class BookmarkStore {
     private static let defaultsKey = "bookmarks"
 
@@ -244,33 +269,105 @@ final class BookmarkStore {
 
     @discardableResult
     func addImportedBookmarks(videoURLs: [URL]) -> [Bookmark] {
+        let plan = prepareImportedMediaImport(videoURLs: videoURLs)
+        let result = applyImportedMediaImport(plan: plan, duplicateResolutionsByVideoPath: [:])
+        return result.affectedBookmarkIDs.compactMap(bookmark(for:))
+    }
+
+    func prepareImportedMediaImport(videoURLs: [URL]) -> ImportedMediaImportPlan {
         loadCacheIfNeeded()
-        let importedAt = Date()
-        let bookmarks = videoURLs.map { videoURL in
+
+        let deduplicatedURLs = Self.deduplicatedVideoURLs(videoURLs)
+        guard !deduplicatedURLs.isEmpty else {
+            return ImportedMediaImportPlan(newMedia: [], duplicates: [])
+        }
+
+        let existingBookmarksByPath = cache
+            .sorted(by: sortComparator(for: .automatic, scope: .allVideos))
+            .reduce(into: [String: Bookmark]()) { result, bookmark in
+                result[bookmark.videoPath] = result[bookmark.videoPath] ?? bookmark
+            }
+
+        var newMedia: [URL] = []
+        var duplicates: [ImportedMediaDuplicate] = []
+        newMedia.reserveCapacity(deduplicatedURLs.count)
+        duplicates.reserveCapacity(deduplicatedURLs.count)
+
+        for videoURL in deduplicatedURLs {
             let normalizedURL = videoURL.standardizedFileURL
-            return Bookmark(
-                id: BookmarkID(),
-                videoPath: normalizedURL.path,
-                timeSeconds: 0,
-                thumbnailTimeSeconds: nil,
-                createdAt: importedAt,
-                updatedAt: importedAt,
-                tags: Self.sanitizedTags(["imported"]),
-                isImported: true,
-                importedAt: importedAt,
-                fileCreatedAt: Self.fileCreationDate(for: normalizedURL)
-            )
+            if let existingBookmark = existingBookmarksByPath[normalizedURL.path] {
+                duplicates.append(
+                    ImportedMediaDuplicate(
+                        videoURL: normalizedURL,
+                        normalizedVideoPath: normalizedURL.path,
+                        existingBookmarkID: existingBookmark.id
+                    )
+                )
+            } else {
+                newMedia.append(normalizedURL)
+            }
         }
-        guard !bookmarks.isEmpty else {
-            return []
+
+        return ImportedMediaImportPlan(newMedia: newMedia, duplicates: duplicates)
+    }
+
+    @discardableResult
+    func applyImportedMediaImport(
+        plan: ImportedMediaImportPlan,
+        duplicateResolutionsByVideoPath: [String: ImportedMediaDuplicateResolution]
+    ) -> ImportedMediaImportResult {
+        loadCacheIfNeeded()
+
+        guard !plan.isEmpty else {
+            return ImportedMediaImportResult(affectedBookmarkIDs: [], firstDuplicateBookmarkID: nil)
         }
-        cache.append(contentsOf: bookmarks)
-        for bookmark in bookmarks {
+
+        let importedAt = Date()
+        var affectedBookmarkIDs: [BookmarkID] = []
+        affectedBookmarkIDs.reserveCapacity(plan.newMedia.count + plan.duplicates.count)
+        var hasChanges = false
+
+        for duplicate in plan.duplicates {
+            guard duplicateResolutionsByVideoPath[duplicate.normalizedVideoPath] == .replace else {
+                continue
+            }
+
+            if let existingBookmarkIndex = cache.firstIndex(where: { $0.id == duplicate.existingBookmarkID }) {
+                let updatedBookmark = importedMediaReplacementBookmark(
+                    from: cache[existingBookmarkIndex],
+                    importedAt: importedAt
+                )
+                cache[existingBookmarkIndex] = updatedBookmark
+                preparedBookmarks[updatedBookmark.id] = makePreparedBookmark(for: updatedBookmark)
+                affectedBookmarkIDs.append(updatedBookmark.id)
+                hasChanges = true
+                continue
+            }
+
+            let insertedBookmark = makeImportedBookmark(for: duplicate.videoURL, importedAt: importedAt)
+            cache.append(insertedBookmark)
+            preparedBookmarks[insertedBookmark.id] = makePreparedBookmark(for: insertedBookmark)
+            affectedBookmarkIDs.append(insertedBookmark.id)
+            hasChanges = true
+        }
+
+        for videoURL in plan.newMedia {
+            let bookmark = makeImportedBookmark(for: videoURL, importedAt: importedAt)
+            cache.append(bookmark)
             preparedBookmarks[bookmark.id] = makePreparedBookmark(for: bookmark)
+            affectedBookmarkIDs.append(bookmark.id)
+            hasChanges = true
         }
-        schedulePersist()
-        notifyDidChange()
-        return bookmarks
+
+        if hasChanges {
+            schedulePersist()
+            notifyDidChange()
+        }
+
+        return ImportedMediaImportResult(
+            affectedBookmarkIDs: affectedBookmarkIDs,
+            firstDuplicateBookmarkID: plan.duplicates.first?.existingBookmarkID
+        )
     }
 
     func bookmark(for id: BookmarkID) -> Bookmark? {
@@ -529,6 +626,40 @@ final class BookmarkStore {
         }
     }
 
+    private func makeImportedBookmark(for videoURL: URL, importedAt: Date) -> Bookmark {
+        let normalizedURL = videoURL.standardizedFileURL
+        return Bookmark(
+            id: BookmarkID(),
+            videoPath: normalizedURL.path,
+            timeSeconds: 0,
+            thumbnailTimeSeconds: nil,
+            createdAt: importedAt,
+            updatedAt: importedAt,
+            tags: Self.sanitizedTags(["imported"]),
+            isProtected: false,
+            isImported: true,
+            importedAt: importedAt,
+            fileCreatedAt: Self.fileCreationDate(for: normalizedURL)
+        )
+    }
+
+    private func importedMediaReplacementBookmark(from bookmark: Bookmark, importedAt: Date) -> Bookmark {
+        let videoURL = bookmark.videoURL.standardizedFileURL
+        return Bookmark(
+            id: bookmark.id,
+            videoPath: videoURL.path,
+            timeSeconds: bookmark.timeSeconds,
+            thumbnailTimeSeconds: bookmark.thumbnailTimeSeconds,
+            createdAt: bookmark.createdAt,
+            updatedAt: importedAt,
+            tags: Self.sanitizedTags(bookmark.tags + ["imported"]),
+            isProtected: bookmark.isProtected,
+            isImported: true,
+            importedAt: importedAt,
+            fileCreatedAt: Self.fileCreationDate(for: videoURL)
+        )
+    }
+
     private static func fileCreationDate(for url: URL) -> Date? {
         do {
             let values = try url.resourceValues(forKeys: [.creationDateKey])
@@ -591,5 +722,16 @@ final class BookmarkStore {
             return lhs.timeSeconds < rhs.timeSeconds
         }
         return lhs.createdAt < rhs.createdAt
+    }
+
+    private static func deduplicatedVideoURLs(_ videoURLs: [URL]) -> [URL] {
+        var seenPaths = Set<String>()
+        return videoURLs.reduce(into: [URL]()) { result, rawURL in
+            let normalizedURL = rawURL.standardizedFileURL
+            guard seenPaths.insert(normalizedURL.path).inserted else {
+                return
+            }
+            result.append(normalizedURL)
+        }
     }
 }

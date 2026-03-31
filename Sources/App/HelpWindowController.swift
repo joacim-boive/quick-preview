@@ -51,6 +51,7 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeSectionTitle("Getting Started"))
         stack.addArrangedSubview(makeBulletList([
             "Open a video from File > Open..., drag and drop, or use Finder selection.",
+            "Use the Autoplay switch in the main window when you want newly opened clips and bookmarks to stay paused.",
             "Enable QuickPreview > Background Shortcut if you want the global shortcut to work after closing the app.",
             "Click the video or press Space to play/pause, even while the bookmark manager is focused.",
             "When you are editing the bookmark search or tags fields, Space stays in that text field instead.",
@@ -63,7 +64,9 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeBulletList([
             "Drag the left and right handles to define a loop range.",
             "Press L to toggle loop on/off for the current clip.",
+            "Press Cmd + Shift + P to toggle autoplay for newly opened clips and bookmark jumps.",
             "Loop preference is remembered per clip.",
+            "Autoplay preference is remembered across app launches.",
             "When enabled, QuickPreview loops the selected segment automatically."
         ]))
 
@@ -149,6 +152,7 @@ final class HelpWindowController: NSWindowController {
         let rows: [(shortcut: String, action: String)] = [
             ("Cmd + O", "Open video file"),
             ("Cmd + Shift + O", "Open current Finder selection"),
+            ("Cmd + Shift + P", "Toggle autoplay for newly opened clips and bookmark jumps"),
             ("Ctrl + Space", "Reopen QuickPreview from anywhere when Background Shortcut is enabled"),
             ("Space", "Play / Pause, including from the bookmark manager unless a text field is being edited"),
             ("L", "Toggle loop on current clip"),

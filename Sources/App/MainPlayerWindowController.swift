@@ -9,6 +9,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let addBookmarkButton = NSButton(title: "", target: nil, action: nil)
     private let loopToggleButton = NSButton(title: "", target: nil, action: nil)
+    private let autoplayToggleButton = NSButton(title: "", target: nil, action: nil)
     private let timeLabel = NSTextField(labelWithString: "00:00 / 00:00")
     private let maxVolumeGain: Double = 3.0 // 300%
     private let volumeSlider = NSSlider(value: 1, minValue: 0, maxValue: 3.0, target: nil, action: nil)
@@ -21,6 +22,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var currentVideoURL: URL?
     private var currentRotationDegrees = 0
     private var isLoopEnabled = true
+    private var isAutoplayEnabled = MainPlayerWindowController.storedAutoplayPreference()
     private var hasStoredSelectionForCurrentClip = false
     private var lastKnownDuration: PlaybackSeconds = 0
     private var lastPersistedPlaybackPlayhead: PlaybackSeconds?
@@ -55,6 +57,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let persistDebounceInterval: TimeInterval = 0.2
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
+    private static let autoplayDefaultsKey = "autoplayEnabled"
     private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
     private static let clipSelectionDefaultsKey = "clipSelectionByPath"
     private static let clipPlaybackDefaultsKey = "clipPlaybackStateByPath"
@@ -137,7 +140,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         let normalizedURL = url.standardizedFileURL
-        engine.attach(to: normalizedURL, autoplay: true)
+        engine.attach(to: normalizedURL, autoplay: isAutoplayEnabled)
         currentVideoURL = normalizedURL
         lastKnownDuration = 0
         lastPersistedPlaybackPlayhead = nil
@@ -250,11 +253,39 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         isLoopEnabled
     }
 
+    func autoplayEnabled() -> Bool {
+        isAutoplayEnabled
+    }
+
     func setLoopEnabled(_ enabled: Bool) {
         isLoopEnabled = enabled
         applyLoopPreferenceForCurrentClip()
         updateLoopToggleButtonAppearance()
         persistCurrentClipPlaybackStateIfNeeded()
+    }
+
+    func setAutoplayEnabled(_ enabled: Bool, showFeedback: Bool = false) {
+        guard isAutoplayEnabled != enabled else {
+            syncAutoplayPreferenceUI()
+            return
+        }
+        isAutoplayEnabled = enabled
+        Self.storeAutoplayPreference(enabled)
+        syncAutoplayPreferenceUI()
+        if showFeedback {
+            playerView.flashStatusMessage(enabled ? "Autoplay On" : "Autoplay Off")
+        }
+    }
+
+    static func storedAutoplayPreference(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: autoplayDefaultsKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: autoplayDefaultsKey)
+    }
+
+    static func storeAutoplayPreference(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: autoplayDefaultsKey)
     }
 
     func rotationDegrees() -> Int {
@@ -484,14 +515,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         addBookmarkButton.translatesAutoresizingMaskIntoConstraints = false
         addBookmarkButton.target = self
         addBookmarkButton.action = #selector(handleAddBookmark(_:))
-        addBookmarkButton.bezelStyle = .texturedRounded
-        addBookmarkButton.image = NSImage(
+        let addBookmarkImage = NSImage(
             systemSymbolName: "bookmark.fill",
             accessibilityDescription: "Add Bookmark"
         )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        addBookmarkImage?.isTemplate = true
+        addBookmarkButton.image = addBookmarkImage
         addBookmarkButton.imagePosition = .imageOnly
         addBookmarkButton.toolTip = "Add Bookmark"
-        addBookmarkButton.contentTintColor = .labelColor
+        addBookmarkButton.isBordered = false
         addBookmarkButton.controlSize = .regular
         addBookmarkButton.setButtonType(.momentaryPushIn)
         addBookmarkButton.setContentHuggingPriority(.required, for: .horizontal)
@@ -500,13 +532,24 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         loopToggleButton.translatesAutoresizingMaskIntoConstraints = false
         loopToggleButton.target = self
         loopToggleButton.action = #selector(handleLoopToggle(_:))
-        loopToggleButton.bezelStyle = .texturedRounded
+        loopToggleButton.isBordered = false
         loopToggleButton.imagePosition = .imageOnly
         loopToggleButton.controlSize = .regular
         loopToggleButton.setButtonType(.momentaryPushIn)
         loopToggleButton.setContentHuggingPriority(.required, for: .horizontal)
         loopToggleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         updateLoopToggleButtonAppearance()
+
+        autoplayToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        autoplayToggleButton.target = self
+        autoplayToggleButton.action = #selector(handleAutoplayToggle(_:))
+        autoplayToggleButton.isBordered = false
+        autoplayToggleButton.imagePosition = .imageOnly
+        autoplayToggleButton.controlSize = .small
+        autoplayToggleButton.setButtonType(.momentaryPushIn)
+        autoplayToggleButton.setContentHuggingPriority(.required, for: .horizontal)
+        autoplayToggleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        syncAutoplayPreferenceUI()
 
         volumePercentLabel.translatesAutoresizingMaskIntoConstraints = false
         volumePercentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -546,7 +589,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         inlineTimelineView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         inlineTimelineView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let controlsRow = NSStackView(views: [inlineTimelineView, addBookmarkButton, loopToggleButton, volumeControls, timeControls])
+        let controlsRow = NSStackView(views: [inlineTimelineView, addBookmarkButton, loopToggleButton, autoplayToggleButton, volumeControls, timeControls])
         controlsRow.orientation = .horizontal
         controlsRow.alignment = .centerY
         controlsRow.distribution = .fill
@@ -752,6 +795,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc
+    private func handleAutoplayToggle(_ sender: Any?) {
+        _ = sender
+        setAutoplayEnabled(!isAutoplayEnabled, showFeedback: true)
+    }
+
+    @objc
     private func handleAddBookmark(_ sender: Any?) {
         _ = sender
         guard let currentVideoURL else { return }
@@ -872,14 +921,14 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             updateVolumePercentLabel(for: clampedVolume)
             pendingRestoredPlayhead = max(restored.playhead, 0)
             pendingRestoredLoopEnabled = restored.isLoopEnabled
-            pendingRestoredIsPlaying = restored.isPlaying
+            pendingRestoredIsPlaying = isAutoplayEnabled ? restored.isPlaying : false
         } else {
             volumeSlider.doubleValue = 1
             engine.setAudioGain(1)
             updateVolumePercentLabel(for: 1)
             pendingRestoredPlayhead = nil
             pendingRestoredLoopEnabled = true
-            pendingRestoredIsPlaying = true
+            pendingRestoredIsPlaying = isAutoplayEnabled
         }
 
         applyPendingPlaybackRestorationIfPossible(duration: duration)
@@ -929,7 +978,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let clampedTime = min(max(pendingBookmarkNavigationTime, 0), duration)
         engine.handle(command: .seekTo(seconds: clampedTime))
         inlineTimelineView.currentPosition = clampedTime
-        engine.play()
+        if isAutoplayEnabled {
+            engine.play()
+        } else {
+            engine.pause()
+        }
         persistCurrentClipPlaybackStateIfNeeded()
     }
 
@@ -970,7 +1023,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             : max(bookmark.timeSeconds, 0)
         engine.handle(command: .seekTo(seconds: clampedTime))
         inlineTimelineView.currentPosition = clampedTime
-        engine.play()
+        if isAutoplayEnabled {
+            engine.play()
+        } else {
+            engine.pause()
+        }
         persistCurrentClipPlaybackStateIfNeeded()
         playerView.flashStatusMessage("Jumped to Bookmark")
     }
@@ -1131,6 +1188,23 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         inlineTimelineView.isControlEnabled = hasVideo
         addBookmarkButton.isEnabled = hasVideo
         loopToggleButton.isEnabled = hasVideo
+        addBookmarkButton.contentTintColor = hasVideo ? .controlAccentColor : .tertiaryLabelColor
+        updateLoopToggleButtonAppearance()
+        syncAutoplayPreferenceUI()
+    }
+
+    private func syncAutoplayPreferenceUI() {
+        let symbolName = isAutoplayEnabled ? "play.circle.fill" : "play.slash"
+        let image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: isAutoplayEnabled ? "Autoplay On" : "Autoplay Off"
+        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        image?.isTemplate = true
+        autoplayToggleButton.image = image
+        autoplayToggleButton.contentTintColor = isAutoplayEnabled ? .controlAccentColor : .tertiaryLabelColor
+        autoplayToggleButton.toolTip = isAutoplayEnabled
+            ? "Autoplay On — click to turn off"
+            : "Autoplay Off — click to turn on"
     }
 
     private func updateLoopToggleButtonAppearance() {
@@ -1139,7 +1213,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             systemSymbolName: symbolName,
             accessibilityDescription: isLoopEnabled ? "Loop On" : "Loop Off"
         )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
-        loopToggleButton.contentTintColor = isLoopEnabled ? .labelColor : .tertiaryLabelColor
+        loopToggleButton.image?.isTemplate = true
+        loopToggleButton.contentTintColor = isLoopEnabled ? .controlAccentColor : .tertiaryLabelColor
         loopToggleButton.toolTip = isLoopEnabled ? "Loop On — click to turn off" : "Loop Off — click to turn on"
     }
 
