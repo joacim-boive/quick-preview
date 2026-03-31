@@ -1,8 +1,12 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 
 typealias PositionUpdateHandler = (PlaybackPosition) -> Void
 typealias LoopModeUpdateHandler = (LoopMode) -> Void
+
+private struct SendableAudioMix: @unchecked Sendable {
+    let value: AVMutableAudioMix
+}
 
 final class PlaybackEngine {
     private let player: AVPlayer
@@ -13,11 +17,11 @@ final class PlaybackEngine {
     private var scrubSeekInFlight = false
     private var pendingScrubSeekSeconds: PlaybackSeconds?
     private var scrubTimer: DispatchSourceTimer?
+    private var frameStepSeconds: PlaybackSeconds?
+    private var frameStepLoadTask: Task<Void, Never>?
+    private var frameStepRequestID = UUID()
     private var audioGain: Float = 1.0
-    private let audioMixQueue = DispatchQueue(
-        label: "quickpreview.playback-engine.audio-mix",
-        qos: .userInitiated
-    )
+    private var audioMixRequestID = UUID()
 
     var onPositionUpdate: PositionUpdateHandler?
     var onLoopModeUpdate: LoopModeUpdateHandler?
@@ -33,6 +37,7 @@ final class PlaybackEngine {
     }
 
     deinit {
+        frameStepLoadTask?.cancel()
         stopScrubTimer()
         detachTimeObserver()
         NotificationCenter.default.removeObserver(self)
@@ -44,6 +49,7 @@ final class PlaybackEngine {
 
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
+        prepareFrameStep(for: item)
         applyAudioGainToCurrentItem(item)
 
         detachTimeObserver()
@@ -157,9 +163,17 @@ final class PlaybackEngine {
         player.volume = 1.0
 
         let asset = item.asset
-        audioMixQueue.async { [weak self, weak item] in
-            guard let self, let item else { return }
-            let audioTracks = asset.tracks(withMediaType: .audio)
+        let requestID = UUID()
+        audioMixRequestID = requestID
+        Task(priority: .userInitiated) {
+
+            let audioTracks: [AVAssetTrack]
+            do {
+                audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            } catch {
+                return
+            }
+
             guard !audioTracks.isEmpty else { return }
 
             let inputParameters = audioTracks.map { track in
@@ -170,16 +184,33 @@ final class PlaybackEngine {
 
             let audioMix = AVMutableAudioMix()
             audioMix.inputParameters = inputParameters
+            let sendableAudioMix = SendableAudioMix(value: audioMix)
 
-            DispatchQueue.main.async { [weak self, weak item] in
-                guard let self, let item else { return }
-                guard self.player.currentItem === item else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.audioMixRequestID == requestID else { return }
+                guard let currentItem = self.player.currentItem, currentItem.asset == asset else { return }
                 guard self.audioGain > 1 else {
                     self.applyAudioGainToCurrentItem()
                     return
                 }
-                item.audioMix = audioMix
+                currentItem.audioMix = sendableAudioMix.value
                 self.player.volume = 1.0
+            }
+        }
+    }
+
+    private func prepareFrameStep(for item: AVPlayerItem) {
+        frameStepLoadTask?.cancel()
+        frameStepSeconds = nil
+        let asset = item.asset
+        let requestID = UUID()
+        frameStepRequestID = requestID
+        frameStepLoadTask = Task { [weak self] in
+            let loadedFrameStepSeconds = await PreciseSeekController.loadFrameStepSeconds(for: asset)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.frameStepRequestID == requestID else { return }
+                self.frameStepSeconds = loadedFrameStepSeconds
             }
         }
     }
@@ -208,7 +239,7 @@ final class PlaybackEngine {
     func seekFrame(delta: Int) {
         guard delta != 0 else { return }
         let current = currentTimeSeconds()
-        let step = seekController.frameStepSeconds(for: player.currentItem) ?? seekController.fineStepSeconds
+        let step = frameStepSeconds ?? seekController.fineStepSeconds
         seekBy(seconds: step * PlaybackSeconds(delta))
         onPositionUpdate?(PlaybackPosition(seconds: current, duration: currentDurationSeconds()))
     }

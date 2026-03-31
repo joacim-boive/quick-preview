@@ -26,13 +26,20 @@ final class PreciseSeekController {
         return min(max(target, 0), max(duration, 0))
     }
 
-    func frameStepSeconds(for item: AVPlayerItem?) -> PlaybackSeconds? {
-        guard
-            let track = item?.asset.tracks(withMediaType: .video).first,
-            track.nominalFrameRate > 0
-        else {
+    static func loadFrameStepSeconds(for asset: AVAsset) async -> PlaybackSeconds? {
+        do {
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                return nil
+            }
+
+            let nominalFrameRate = try await track.load(.nominalFrameRate)
+            guard nominalFrameRate > 0 else {
+                return nil
+            }
+
+            return 1.0 / PlaybackSeconds(nominalFrameRate)
+        } catch {
             return nil
         }
-        return 1.0 / PlaybackSeconds(track.nominalFrameRate)
     }
 }

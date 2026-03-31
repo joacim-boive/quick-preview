@@ -21,6 +21,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         static let fileCreatedAt = "fileCreatedAt"
     }
 
+    private enum ImportedMediaDuplicatePromptAction {
+        case replace
+        case replaceAll
+        case skip
+        case skipAll
+        case cancel
+    }
+
     private let bookmarkStore: BookmarkStore
     private let thumbnailService: VideoThumbnailService
     private let protectedBookmarksSessionController: ProtectedBookmarksSessionController
@@ -41,6 +49,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private var suppressBookmarkOpenOnSelectionChange = false
     private weak var activePreviewThumbnailCell: BookmarkThumbnailCellView?
     private var activeThumbnailPickerSheetController: BookmarkThumbnailPickerSheetController?
+    private var pendingRevealHighlightBookmarkID: BookmarkID?
 
     private static let importedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -114,14 +123,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func revealBookmark(_ bookmark: Bookmark) {
-        if bookmark.videoPath == currentVideoURL?.path {
-            currentScope = .currentVideo
-            scopeControl.selectedSegment = BookmarkListScope.currentVideo.rawValue
-        } else {
-            currentScope = .allVideos
-            scopeControl.selectedSegment = BookmarkListScope.allVideos.rawValue
-        }
-        reloadBookmarks(selecting: bookmark.id)
+        revealBookmark(bookmark, preferredScope: nil, highlight: false)
     }
 
     func navigateSelection(delta: Int) {
@@ -434,8 +436,12 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         if let firstSelectedRow = rowsToSelect.first {
             tableView.selectRowIndexes(rowsToSelect, byExtendingSelection: false)
             tableView.scrollRowToVisible(firstSelectedRow)
+            if let bookmarkID, pendingRevealHighlightBookmarkID == bookmarkID {
+                flashRevealHighlight(forRow: firstSelectedRow, bookmarkID: bookmarkID)
+            }
         } else {
             tableView.deselectAll(nil)
+            pendingRevealHighlightBookmarkID = nil
         }
         suppressBookmarkOpenOnSelectionChange = false
 
@@ -510,6 +516,23 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         presentThumbnailPicker(for: bookmark)
+    }
+
+    private func revealBookmarkInFinder(for bookmarkID: BookmarkID) {
+        guard let bookmark = bookmarkStore.bookmark(for: bookmarkID) else {
+            return
+        }
+
+        let videoURL = bookmark.videoURL.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: videoURL.path) else {
+            showInfoAlert(
+                title: "File Not Found",
+                message: "\"\(bookmark.videoDisplayName)\" is no longer available at its saved location."
+            )
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([videoURL])
     }
 
     private func presentThumbnailPicker(for bookmark: Bookmark) {
@@ -593,13 +616,182 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         guard !validVideoURLs.isEmpty else {
             return
         }
-        let importedBookmarks = bookmarkStore.addImportedBookmarks(videoURLs: validVideoURLs)
-        guard !importedBookmarks.isEmpty else {
+
+        let importPlan = bookmarkStore.prepareImportedMediaImport(videoURLs: validVideoURLs)
+        guard !importPlan.isEmpty else {
             return
         }
-        currentScope = .imported
-        scopeControl.selectedSegment = BookmarkListScope.imported.rawValue
-        reloadBookmarks(selecting: importedBookmarks.first?.id)
+
+        let duplicateResolutionsByVideoPath: [String: ImportedMediaDuplicateResolution]
+        if importPlan.duplicates.isEmpty {
+            duplicateResolutionsByVideoPath = [:]
+        } else {
+            guard let collectedResolutions = collectDuplicateResolutions(for: importPlan) else {
+                return
+            }
+            duplicateResolutionsByVideoPath = collectedResolutions
+        }
+
+        let importResult = bookmarkStore.applyImportedMediaImport(
+            plan: importPlan,
+            duplicateResolutionsByVideoPath: duplicateResolutionsByVideoPath
+        )
+
+        guard
+            let selectedBookmarkID = importResult.affectedBookmarkIDs.first ?? importResult.firstDuplicateBookmarkID
+        else {
+            return
+        }
+
+        currentScope = importPlan.duplicates.isEmpty ? .imported : .allVideos
+        scopeControl.selectedSegment = currentScope.rawValue
+        reloadBookmarks(selecting: selectedBookmarkID)
+    }
+
+    private func collectDuplicateResolutions(
+        for importPlan: ImportedMediaImportPlan
+    ) -> [String: ImportedMediaDuplicateResolution]? {
+        var duplicateResolutionsByVideoPath: [String: ImportedMediaDuplicateResolution] = [:]
+        var bulkResolution: ImportedMediaDuplicateResolution?
+
+        for (index, duplicate) in importPlan.duplicates.enumerated() {
+            if let bulkResolution {
+                duplicateResolutionsByVideoPath[duplicate.normalizedVideoPath] = bulkResolution
+                continue
+            }
+
+            if let existingBookmark = bookmarkStore.bookmark(for: duplicate.existingBookmarkID) {
+                revealBookmark(existingBookmark, preferredScope: .allVideos, highlight: true)
+            }
+
+            switch promptForDuplicateImportAction(
+                duplicate,
+                duplicateIndex: index,
+                totalDuplicates: importPlan.duplicates.count
+            ) {
+            case .replace:
+                duplicateResolutionsByVideoPath[duplicate.normalizedVideoPath] = .replace
+            case .replaceAll:
+                duplicateResolutionsByVideoPath[duplicate.normalizedVideoPath] = .replace
+                bulkResolution = .replace
+            case .skip:
+                duplicateResolutionsByVideoPath[duplicate.normalizedVideoPath] = .skip
+            case .skipAll:
+                duplicateResolutionsByVideoPath[duplicate.normalizedVideoPath] = .skip
+                bulkResolution = .skip
+            case .cancel:
+                return nil
+            }
+        }
+
+        return duplicateResolutionsByVideoPath
+    }
+
+    private func promptForDuplicateImportAction(
+        _ duplicate: ImportedMediaDuplicate,
+        duplicateIndex: Int,
+        totalDuplicates: Int
+    ) -> ImportedMediaDuplicatePromptAction {
+        let alert = NSAlert()
+        let videoName = duplicate.videoURL.lastPathComponent
+        let isSingleDuplicate = totalDuplicates == 1
+        let duplicateProgressMessage = totalDuplicates > 1 ? "Duplicate \(duplicateIndex + 1) of \(totalDuplicates)." : nil
+
+        alert.messageText = "\"\(videoName)\" is already imported."
+        if isSingleDuplicate {
+            alert.informativeText = [
+                duplicateProgressMessage,
+                "Replace will refresh the existing imported bookmark. Skip will keep the current bookmark unchanged."
+            ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        } else {
+            alert.informativeText = [
+                duplicateProgressMessage,
+                "Replace updates just this bookmark. Replace All or Skip All will apply the same choice to the remaining duplicates while still importing any new media from this batch."
+            ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        }
+
+        if isSingleDuplicate {
+            alert.addButton(withTitle: "Replace")
+            alert.addButton(withTitle: "Skip")
+            alert.addButton(withTitle: "Cancel")
+        } else {
+            alert.addButton(withTitle: "Replace")
+            alert.addButton(withTitle: "Replace All")
+            alert.addButton(withTitle: "Skip")
+            alert.addButton(withTitle: "Skip All")
+            alert.addButton(withTitle: "Cancel")
+        }
+
+        guard let window else {
+            return .cancel
+        }
+
+        window.makeKeyAndOrderFront(nil)
+        let response = alert.runModal()
+
+        if isSingleDuplicate {
+            switch response.rawValue {
+            case NSApplication.ModalResponse.alertFirstButtonReturn.rawValue:
+                return .replace
+            case NSApplication.ModalResponse.alertSecondButtonReturn.rawValue:
+                return .skip
+            default:
+                return .cancel
+            }
+        }
+
+        switch response.rawValue {
+        case NSApplication.ModalResponse.alertFirstButtonReturn.rawValue:
+            return .replace
+        case NSApplication.ModalResponse.alertSecondButtonReturn.rawValue:
+            return .replaceAll
+        case NSApplication.ModalResponse.alertThirdButtonReturn.rawValue:
+            return .skip
+        case NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1:
+            return .skipAll
+        default:
+            return .cancel
+        }
+    }
+
+    private func revealBookmark(
+        _ bookmark: Bookmark,
+        preferredScope: BookmarkListScope?,
+        highlight: Bool
+    ) {
+        searchField.stringValue = ""
+
+        if let preferredScope {
+            currentScope = preferredScope
+        } else if bookmark.videoPath == currentVideoURL?.path {
+            currentScope = .currentVideo
+        } else {
+            currentScope = .allVideos
+        }
+
+        scopeControl.selectedSegment = min(currentScope.rawValue, max(scopeControl.segmentCount - 1, 0))
+        if highlight {
+            pendingRevealHighlightBookmarkID = bookmark.id
+        }
+        reloadBookmarks(selecting: bookmark.id)
+    }
+
+    private func flashRevealHighlight(forRow row: Int, bookmarkID: BookmarkID) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.pendingRevealHighlightBookmarkID == bookmarkID else {
+                return
+            }
+            guard let rowView = self.tableView.rowView(atRow: row, makeIfNecessary: true) as? BookmarkTableRowView else {
+                return
+            }
+            rowView.flashRevealHighlight()
+            self.pendingRevealHighlightBookmarkID = nil
+        }
     }
 
     private func isVideoURL(_ url: URL) -> Bool {
@@ -732,12 +924,32 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
         activePreviewThumbnailCell = nil
     }
+
+    private func showInfoAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
 }
 
 extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int {
         _ = tableView
         return bookmarks.count
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        _ = row
+        let identifier = NSUserInterfaceItemIdentifier("BookmarkTableRowView")
+        if let rowView = tableView.makeView(withIdentifier: identifier, owner: self) as? BookmarkTableRowView {
+            return rowView
+        }
+        let rowView = BookmarkTableRowView(frame: .zero)
+        rowView.identifier = identifier
+        return rowView
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
@@ -794,6 +1006,8 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
                 switch action {
                 case let .selectThumbnailFrame(bookmarkID):
                     self.selectThumbnailFrame(for: bookmarkID)
+                case let .showInFinder(bookmarkID):
+                    self.revealBookmarkInFinder(for: bookmarkID)
                 }
             }
             return cell
@@ -977,6 +1191,62 @@ private final class BookmarkTableView: NSTableView {
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
         onScrollWheel?()
+    }
+}
+
+private final class BookmarkTableRowView: NSTableRowView {
+    private let revealHighlightView = BookmarkRowHighlightView(frame: .zero)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        revealHighlightView.autoresizingMask = [.width, .height]
+        revealHighlightView.isHidden = true
+        addSubview(revealHighlightView, positioned: .above, relativeTo: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func layout() {
+        super.layout()
+        revealHighlightView.frame = bounds.insetBy(dx: 4, dy: 2)
+    }
+
+    func flashRevealHighlight() {
+        revealHighlightView.layer?.removeAllAnimations()
+        revealHighlightView.alphaValue = 0.78
+        revealHighlightView.isHidden = false
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 1.15
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            revealHighlightView.animator().alphaValue = 0
+        } completionHandler: {
+            self.revealHighlightView.alphaValue = 0
+            self.revealHighlightView.isHidden = true
+        }
+    }
+}
+
+private final class BookmarkRowHighlightView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        _ = point
+        return nil
     }
 }
 
@@ -1434,6 +1704,7 @@ private final class BookmarkProtectedCellView: NSTableCellView {
 
 private enum BookmarkRowAction {
     case selectThumbnailFrame(BookmarkID)
+    case showInFinder(BookmarkID)
 }
 
 private final class BookmarkActionsCellView: NSTableCellView {
@@ -1447,7 +1718,7 @@ private final class BookmarkActionsCellView: NSTableCellView {
         translatesAutoresizingMaskIntoConstraints = false
 
         actionsButton.translatesAutoresizingMaskIntoConstraints = false
-        actionsButton.bezelStyle = .texturedRounded
+        actionsButton.bezelStyle = .smallSquare
         configureActionsButtonAppearance()
         actionsButton.target = self
         actionsButton.action = #selector(handleActionsButton(_:))
@@ -1518,6 +1789,14 @@ private final class BookmarkActionsCellView: NSTableCellView {
         selectThumbnailItem.target = self
         menu.addItem(selectThumbnailItem)
 
+        let showInFinderItem = NSMenuItem(
+            title: "Show in Finder",
+            action: #selector(handleShowInFinder(_:)),
+            keyEquivalent: ""
+        )
+        showInFinderItem.target = self
+        menu.addItem(showInFinderItem)
+
         menu.popUp(positioning: nil, at: NSPoint(x: sender.bounds.minX, y: sender.bounds.maxY + 4), in: sender)
     }
 
@@ -1526,6 +1805,13 @@ private final class BookmarkActionsCellView: NSTableCellView {
         _ = sender
         guard let bookmarkID else { return }
         onAction?(.selectThumbnailFrame(bookmarkID))
+    }
+
+    @objc
+    private func handleShowInFinder(_ sender: Any?) {
+        _ = sender
+        guard let bookmarkID else { return }
+        onAction?(.showInFinder(bookmarkID))
     }
 
     private var enclosingTableView: NSTableView? {
@@ -1550,7 +1836,7 @@ private final class BookmarkRemoveCellView: NSTableCellView {
         translatesAutoresizingMaskIntoConstraints = false
 
         removeButton.translatesAutoresizingMaskIntoConstraints = false
-        removeButton.bezelStyle = .texturedRounded
+        removeButton.bezelStyle = .smallSquare
         removeButton.image = NSImage(
             systemSymbolName: "trash",
             accessibilityDescription: "Remove Bookmark"

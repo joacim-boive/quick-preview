@@ -311,7 +311,7 @@ final class SubscriptionController {
             return transaction.offerType == .introductory
                 ? .trialActive(snapshot)
                 : .subscriptionActive(snapshot)
-        @unknown default:
+        default:
             return .subscriptionActive(snapshot)
         }
     }
@@ -327,7 +327,7 @@ final class SubscriptionController {
             return .billingRetry
         case .subscribed, .expired, .revoked, .none:
             return transaction.offerType == .introductory ? .trialActive : .subscriptionActive
-        @unknown default:
+        default:
             return .subscriptionActive
         }
     }

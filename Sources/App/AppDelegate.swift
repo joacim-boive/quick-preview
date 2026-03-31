@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var lastObservedFinderSelectedVideoURL: URL?
     private var ignoredFinderSelectedVideoURL: URL?
     private let loopMenuItemTag = 4101
+    private let autoplayMenuItemTag = 4102
     private let rotationMenuItemBaseTag = 4200
     private let protectedMediaMenuItemTag = 4300
     private let paranoidModeMenuItemTag = 4301
@@ -65,9 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
         }
-        if let protectedBookmarksSessionObserver {
-            NotificationCenter.default.removeObserver(protectedBookmarksSessionObserver)
-        }
+        NotificationCenter.default.removeObserver(
+            self,
+            name: .protectedBookmarksSessionDidChange,
+            object: protectedBookmarksSessionController
+        )
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -119,6 +122,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func handleLoopFromMenu(_ sender: Any?) {
         let controller = ensureWindowController()
         controller.setLoopEnabled(!controller.loopEnabled())
+        _ = sender
+    }
+
+    @objc
+    private func handleAutoplayFromMenu(_ sender: Any?) {
+        let controller = ensureWindowController()
+        controller.setAutoplayEnabled(!controller.autoplayEnabled(), showFeedback: true)
         _ = sender
     }
 
@@ -260,6 +270,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case loopMenuItemTag:
             menuItem.state = controller?.loopEnabled() == true ? .on : .off
             return isEntitled && controller?.hasLoadedVideo() == true
+        case autoplayMenuItemTag:
+            let autoplayEnabled = controller?.autoplayEnabled() ?? MainPlayerWindowController.storedAutoplayPreference()
+            menuItem.state = autoplayEnabled ? .on : .off
+            return isEntitled
         case protectedMediaMenuItemTag:
             let isUnlocked = protectedBookmarksSessionController.isUnlocked
             menuItem.title = isUnlocked ? "Lock Protected Media" : "Unlock Protected Media..."
@@ -496,6 +510,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         loopItem.tag = loopMenuItemTag
         loopItem.keyEquivalentModifierMask = [.command]
         playbackMenu.addItem(loopItem)
+
+        let autoplayItem = NSMenuItem(
+            title: "Autoplay",
+            action: #selector(handleAutoplayFromMenu(_:)),
+            keyEquivalent: "p"
+        )
+        autoplayItem.target = self
+        autoplayItem.tag = autoplayMenuItemTag
+        autoplayItem.keyEquivalentModifierMask = [.command, .shift]
+        playbackMenu.addItem(autoplayItem)
 
         let rotationMenuItem = NSMenuItem(title: "Rotation", action: nil, keyEquivalent: "")
         let rotationMenu = NSMenu(title: "Rotation")
@@ -887,20 +911,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func configureProtectedBookmarksSessionObserver() {
-        protectedBookmarksSessionObserver = NotificationCenter.default.addObserver(
-            forName: .protectedBookmarksSessionDidChange,
-            object: protectedBookmarksSessionController,
-            queue: .main
-        ) { [weak self] _ in
-            guard
-                let self,
-                !self.protectedBookmarksSessionController.isUnlocked
-            else {
-                return
-            }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleProtectedBookmarksSessionDidChange(_:)),
+            name: .protectedBookmarksSessionDidChange,
+            object: protectedBookmarksSessionController
+        )
+        protectedBookmarksSessionObserver = nil
+    }
 
-            self.windowController?.closeCurrentProtectedVideoIfNeeded()
+    @MainActor
+    @objc
+    private func handleProtectedBookmarksSessionDidChange(_ notification: Notification) {
+        _ = notification
+        guard !protectedBookmarksSessionController.isUnlocked else {
+            return
         }
+
+        windowController?.closeCurrentProtectedVideoIfNeeded()
     }
 
     private func refreshAccessStateInBackground() {
