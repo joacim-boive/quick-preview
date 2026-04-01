@@ -17,6 +17,7 @@ private struct BookmarkTimelineMarker: Equatable, Comparable {
 final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
     private let bookmarkStore: BookmarkStore
+    private let bookmarkTimelineHoverPreview: BookmarkTimelineMarkerHoverPreviewController
     private let playerView = PlayerSurfaceView(frame: .zero)
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let addBookmarkButton = NSButton(title: "", target: nil, action: nil)
@@ -75,13 +76,31 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var shortcutHintText: String?
     private static let baseWindowTitle = "Quick Preview Video Loop"
     private static let autoplayDefaultsKey = "autoplayEnabled"
+
+    /// Keeps the controls row stable when swapping autoplay symbols (they have different intrinsic widths).
+    private static func autoplayToggleButtonLayoutWidth() -> CGFloat {
+        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        func width(for symbolName: String) -> CGFloat {
+            let button = NSButton(title: "", target: nil, action: nil)
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            button.controlSize = .small
+            button.setButtonType(.momentaryPushIn)
+            let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(config)
+            image?.isTemplate = true
+            button.image = image
+            return button.fittingSize.width
+        }
+        return max(width(for: "play.circle.fill"), width(for: "play.slash"))
+    }
     private static let clipRotationDefaultsKey = "clipRotationDegreesByPath"
     private static let clipSelectionDefaultsKey = "clipSelectionByPath"
     private static let clipPlaybackDefaultsKey = "clipPlaybackStateByPath"
     private static let lastOpenedVideoPathDefaultsKey = "lastOpenedVideoPath"
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
-    var onShowBookmarksRequested: ((Bookmark?) -> Void)?
+    /// Second parameter: flash row highlight in the bookmarks manager (e.g. when focusing an existing bookmark at the playhead).
+    var onShowBookmarksRequested: ((Bookmark, Bool) -> Void)?
     var onCurrentVideoURLChange: ((URL?) -> Void)?
     var onBookmarkNavigationRequested: ((Int) -> Void)?
 
@@ -116,8 +135,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         case video(URL)
     }
 
-    init(bookmarkStore: BookmarkStore) {
+    init(bookmarkStore: BookmarkStore, thumbnailService: VideoThumbnailService) {
         self.bookmarkStore = bookmarkStore
+        self.bookmarkTimelineHoverPreview = BookmarkTimelineMarkerHoverPreviewController(
+            thumbnailService: thumbnailService
+        )
         let root = KeyCaptureView(frame: NSRect(x: 0, y: 0, width: 920, height: 640))
         let window = NSWindow(
             contentRect: root.frame,
@@ -162,6 +184,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             window?.orderFront(nil)
         }
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
+        bookmarkTimelineHoverPreview.hide()
         let normalizedURL = url.standardizedFileURL
         Self.storeLastOpenedVideoURL(normalizedURL)
         engine.attach(to: normalizedURL, autoplay: isAutoplayEnabled)
@@ -565,6 +588,15 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         inlineTimelineView.onBookmarkDragEnded = { [weak self] bookmarkID, seconds in
             self?.handleBookmarkMarkerDrag(bookmarkID: bookmarkID, seconds: seconds, shouldCommit: true)
         }
+        inlineTimelineView.onBookmarkMarkerHoverEnter = { [weak self] bookmarkID, rectInWindow in
+            self?.showTimelineBookmarkHoverPreview(bookmarkID: bookmarkID, anchorRectInWindow: rectInWindow)
+        }
+        inlineTimelineView.onBookmarkMarkerHoverExit = { [weak self] in
+            self?.bookmarkTimelineHoverPreview.hide()
+        }
+        inlineTimelineView.onBookmarkMarkerHoverMove = { [weak self] _, rectInWindow in
+            self?.bookmarkTimelineHoverPreview.reposition(anchorRectInWindow: rectInWindow, parentWindow: self?.window)
+        }
 
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -677,7 +709,8 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             emptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: playerView.leadingAnchor, constant: 16),
             emptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: playerView.trailingAnchor, constant: -16),
             volumeSlider.widthAnchor.constraint(equalToConstant: 110),
-            volumePercentLabel.widthAnchor.constraint(equalToConstant: 48)
+            volumePercentLabel.widthAnchor.constraint(equalToConstant: 48),
+            autoplayToggleButton.widthAnchor.constraint(equalToConstant: Self.autoplayToggleButtonLayoutWidth())
         ])
 
         updateControlState(hasVideo: false)
@@ -820,6 +853,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func clearLoadedVideoState() {
+        bookmarkTimelineHoverPreview.hide()
         currentVideoURL = nil
         synchronizeCurrentClipBookmarks()
         selectedBookmarkID = nil
@@ -880,12 +914,19 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private func handleAddBookmark(_ sender: Any?) {
         _ = sender
         guard let currentVideoURL else { return }
+        let timeSeconds = engine.currentTimeSeconds()
+        if let existing = bookmarkStore.bookmarkNearPosition(videoURL: currentVideoURL, timeSeconds: timeSeconds) {
+            setSelectedBookmarkID(existing.id, persistPlaybackState: true)
+            playerView.flashStatusMessage("Bookmark already added")
+            onShowBookmarksRequested?(existing, true)
+            return
+        }
         let bookmark = bookmarkStore.addBookmark(
             videoURL: currentVideoURL,
-            timeSeconds: engine.currentTimeSeconds()
+            timeSeconds: timeSeconds
         )
         playerView.flashStatusMessage("Bookmark Added")
-        onShowBookmarksRequested?(bookmark)
+        onShowBookmarksRequested?(bookmark, false)
     }
 
     private func handlePlayerSurfaceClick() {
@@ -1123,6 +1164,25 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
         inlineTimelineView.bookmarks = currentClipBookmarks
         inlineTimelineView.selectedBookmarkID = selectedBookmarkID
+    }
+
+    private func showTimelineBookmarkHoverPreview(bookmarkID: BookmarkID, anchorRectInWindow: NSRect) {
+        guard
+            let url = currentVideoURL,
+            let bookmark = bookmarkStore.bookmark(for: bookmarkID)
+        else {
+            bookmarkTimelineHoverPreview.hide()
+            return
+        }
+        guard bookmark.videoPath == url.standardizedFileURL.path else {
+            bookmarkTimelineHoverPreview.hide()
+            return
+        }
+        bookmarkTimelineHoverPreview.show(
+            bookmark: bookmark,
+            anchorRectInWindow: anchorRectInWindow,
+            parentWindow: window
+        )
     }
 
     private func setSelectedBookmarkID(_ bookmarkID: BookmarkID?, persistPlaybackState: Bool = false) {
@@ -1583,6 +1643,163 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
+private final class BookmarkTimelineMarkerHoverPreviewController {
+    private final class PreviewPanel: NSPanel {
+        override var canBecomeKey: Bool {
+            false
+        }
+
+        override var canBecomeMain: Bool {
+            false
+        }
+    }
+
+    private let thumbnailService: VideoThumbnailService
+    private let panel: PreviewPanel
+    private let previewImageView = NSImageView(frame: .zero)
+    private let contentView = NSView(frame: .zero)
+    private var activeBookmarkID: BookmarkID?
+    private var hasLoadedHighRes = false
+    private var lastAnchorRectInWindow = NSRect.zero
+    private weak var lastParentWindow: NSWindow?
+
+    init(thumbnailService: VideoThumbnailService) {
+        self.thumbnailService = thumbnailService
+        let contentRect = NSRect(x: 0, y: 0, width: 320, height: 200)
+        panel = PreviewPanel(
+            contentRect: contentRect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        previewImageView.imageScaling = .scaleProportionallyUpOrDown
+        previewImageView.imageAlignment = .alignCenter
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        contentView.layer?.cornerRadius = 10
+        contentView.layer?.masksToBounds = true
+        contentView.addSubview(previewImageView)
+        panel.contentView = contentView
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.level = .floating
+    }
+
+    func show(bookmark: Bookmark, anchorRectInWindow: NSRect, parentWindow: NSWindow?) {
+        activeBookmarkID = bookmark.id
+        hasLoadedHighRes = false
+        lastAnchorRectInWindow = anchorRectInWindow
+        lastParentWindow = parentWindow
+        let captureBookmarkID = bookmark.id
+        previewImageView.image = Self.placeholderImage
+        applyContentSize(for: Self.placeholderImage, parentWindow: parentWindow)
+        positionPanel(anchorRectInWindow: anchorRectInWindow, parentWindow: parentWindow)
+        panel.orderFront(nil)
+
+        thumbnailService.requestThumbnail(
+            for: bookmark.videoURL,
+            at: bookmark.effectiveThumbnailTimeSeconds,
+            maximumSize: CGSize(width: 256, height: 144)
+        ) { [weak self] image in
+            guard let self, self.activeBookmarkID == captureBookmarkID else { return }
+            let resolved = image ?? Self.placeholderImage
+            self.previewImageView.image = resolved
+            self.applyContentSize(for: resolved, parentWindow: self.lastParentWindow)
+            self.positionPanel(
+                anchorRectInWindow: self.lastAnchorRectInWindow,
+                parentWindow: self.lastParentWindow
+            )
+            self.requestHighResolutionPreview(bookmark: bookmark, captureBookmarkID: captureBookmarkID)
+        }
+    }
+
+    func reposition(anchorRectInWindow: NSRect, parentWindow: NSWindow?) {
+        lastAnchorRectInWindow = anchorRectInWindow
+        lastParentWindow = parentWindow ?? lastParentWindow
+        guard activeBookmarkID != nil, panel.isVisible else { return }
+        positionPanel(anchorRectInWindow: anchorRectInWindow, parentWindow: parentWindow)
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+        activeBookmarkID = nil
+        hasLoadedHighRes = false
+    }
+
+    private func requestHighResolutionPreview(bookmark: Bookmark, captureBookmarkID: BookmarkID) {
+        guard !hasLoadedHighRes else { return }
+        hasLoadedHighRes = true
+        thumbnailService.requestThumbnail(
+            for: bookmark.videoURL,
+            at: bookmark.effectiveThumbnailTimeSeconds,
+            maximumSize: nil
+        ) { [weak self] image in
+            guard let self, self.activeBookmarkID == captureBookmarkID, let image else { return }
+            self.previewImageView.image = image
+            self.applyContentSize(for: image, parentWindow: self.lastParentWindow)
+            self.positionPanel(
+                anchorRectInWindow: self.lastAnchorRectInWindow,
+                parentWindow: self.lastParentWindow
+            )
+        }
+    }
+
+    private func applyContentSize(for image: NSImage, parentWindow: NSWindow?) {
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            setPanelContentSize(NSSize(width: 294, height: 174))
+            return
+        }
+        let screenFrame = parentWindow?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let maxContentWidth = max(240, floor((screenFrame?.width ?? 1080) * 0.22))
+        let maxContentHeight = max(135, floor((screenFrame?.height ?? 720) * 0.22))
+        let widthScale = maxContentWidth / imageSize.width
+        let heightScale = maxContentHeight / imageSize.height
+        let scale = min(widthScale, heightScale, 1)
+        let contentWidth = max(240, floor(imageSize.width * scale))
+        let contentHeight = max(135, floor(imageSize.height * scale))
+        setPanelContentSize(NSSize(width: contentWidth + 24, height: contentHeight + 24))
+    }
+
+    private func setPanelContentSize(_ size: NSSize) {
+        contentView.setFrameSize(size)
+        previewImageView.frame = contentView.bounds.insetBy(dx: 12, dy: 12)
+        panel.setContentSize(size)
+    }
+
+    private func positionPanel(anchorRectInWindow: NSRect, parentWindow: NSWindow?) {
+        let size = contentView.frame.size
+        guard size.width > 0, size.height > 0 else { return }
+        let screenFrame = parentWindow?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let anchorScreen = parentWindow?.convertToScreen(anchorRectInWindow) ?? anchorRectInWindow
+        let gap: CGFloat = 8
+        var x = anchorScreen.midX - (size.width / 2)
+        var y = anchorScreen.maxY + gap
+        x = min(max(screenFrame.minX, x), screenFrame.maxX - size.width)
+        y = min(max(screenFrame.minY, y), screenFrame.maxY - size.height)
+        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+    }
+
+    private static let placeholderImage: NSImage = {
+        let size = NSSize(width: 128, height: 72)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(calibratedWhite: 0.16, alpha: 1).setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+        let symbolRect = NSRect(x: 44, y: 20, width: 40, height: 32)
+        if let symbol = NSImage(
+            systemSymbolName: "bookmark.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(.init(pointSize: 24, weight: .regular)) {
+            symbol.draw(in: symbolRect)
+        }
+        image.unlockFocus()
+        return image
+    }()
+}
+
 private final class InlineSelectionTimelineView: NSView {
     enum DragTarget: Equatable {
         case playhead
@@ -1643,6 +1860,9 @@ private final class InlineSelectionTimelineView: NSView {
     var onBookmarkDragBegan: ((BookmarkID) -> Void)?
     var onBookmarkDragChanged: ((BookmarkID, PlaybackSeconds) -> Void)?
     var onBookmarkDragEnded: ((BookmarkID, PlaybackSeconds) -> Void)?
+    var onBookmarkMarkerHoverEnter: ((BookmarkID, NSRect) -> Void)?
+    var onBookmarkMarkerHoverExit: (() -> Void)?
+    var onBookmarkMarkerHoverMove: ((BookmarkID, NSRect) -> Void)?
 
     var isDraggingPlayhead: Bool {
         dragTarget == .playhead
@@ -1674,6 +1894,8 @@ private final class InlineSelectionTimelineView: NSView {
     private var pendingPrecisionActivation: PendingPrecisionActivation?
     private var precisionZoomState: PrecisionZoomState?
     private var precisionActivationWorkItem: DispatchWorkItem?
+    private var hoveredBookmarkID: BookmarkID?
+    private var hoverTrackingArea: NSTrackingArea?
     private let trackLayer = CALayer()
     private let selectionLayer = CALayer()
     private let playheadLayer = CALayer()
@@ -1702,6 +1924,38 @@ private final class InlineSelectionTimelineView: NSView {
         updateLayerFrames()
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard dragTarget == nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        updateBookmarkHover(at: point)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        _ = event
+        clearBookmarkHoverState()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard isControlEnabled else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        updateBookmarkHover(at: point)
+    }
+
     override func resetCursorRects() {
         super.resetCursorRects()
 
@@ -1714,6 +1968,7 @@ private final class InlineSelectionTimelineView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isControlEnabled else { return }
+        clearBookmarkHoverState()
         let point = convert(event.locationInWindow, from: nil)
         clearPrecisionInteractionState()
         let resolvedTarget = resolvedDragTarget(for: point)
@@ -1763,6 +2018,8 @@ private final class InlineSelectionTimelineView: NSView {
             clearPrecisionInteractionState()
         }
         dragTarget = nil
+        let hoverPoint = convert(event.locationInWindow, from: nil)
+        updateBookmarkHover(at: hoverPoint)
     }
 
     private func configureLayers() {
@@ -1865,6 +2122,10 @@ private final class InlineSelectionTimelineView: NSView {
         }
         updateLayerOrdering()
         window?.invalidateCursorRects(for: self)
+        if let hoveredBookmarkID, let bookmark = bookmarks.first(where: { $0.id == hoveredBookmarkID }) {
+            let rectInWindow = convert(bookmarkRect(for: bookmark), to: nil)
+            onBookmarkMarkerHoverMove?(hoveredBookmarkID, rectInWindow)
+        }
     }
 
     private var trackRect: CGRect {
@@ -2197,6 +2458,44 @@ private final class InlineSelectionTimelineView: NSView {
             return true
         }
         return false
+    }
+
+    private func bookmarkID(at point: CGPoint) -> BookmarkID? {
+        if let selectedBookmarkID,
+           let selected = bookmarks.first(where: { $0.id == selectedBookmarkID }),
+           bookmarkHitRect(for: selected).contains(point) {
+            return selectedBookmarkID
+        }
+        return bookmarks.first(where: { bookmarkHitRect(for: $0).contains(point) })?.id
+    }
+
+    private func clearBookmarkHoverState() {
+        guard hoveredBookmarkID != nil else { return }
+        hoveredBookmarkID = nil
+        onBookmarkMarkerHoverExit?()
+    }
+
+    private func updateBookmarkHover(at point: CGPoint) {
+        guard dragTarget == nil, isControlEnabled else {
+            clearBookmarkHoverState()
+            return
+        }
+        let newID = bookmarkID(at: point)
+        if newID == hoveredBookmarkID {
+            if let newID, let bookmark = bookmarks.first(where: { $0.id == newID }) {
+                let rectInWindow = convert(bookmarkRect(for: bookmark), to: nil)
+                onBookmarkMarkerHoverMove?(newID, rectInWindow)
+            }
+            return
+        }
+        if hoveredBookmarkID != nil {
+            onBookmarkMarkerHoverExit?()
+        }
+        hoveredBookmarkID = newID
+        if let newID, let bookmark = bookmarks.first(where: { $0.id == newID }) {
+            let rectInWindow = convert(bookmarkRect(for: bookmark), to: nil)
+            onBookmarkMarkerHoverEnter?(newID, rectInWindow)
+        }
     }
 }
 

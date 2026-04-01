@@ -177,8 +177,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         reloadBookmarks()
     }
 
-    func revealBookmark(_ bookmark: Bookmark) {
-        revealBookmark(bookmark, preferredScope: nil, highlight: false)
+    func revealBookmark(_ bookmark: Bookmark, highlight: Bool = false) {
+        revealBookmark(bookmark, preferredScope: nil, highlight: highlight)
     }
 
     func navigateSelection(delta: Int) {
