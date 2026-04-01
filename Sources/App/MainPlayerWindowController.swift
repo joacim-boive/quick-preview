@@ -55,6 +55,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private var pendingRestoredPlayhead: PlaybackSeconds?
     private var pendingRestoredLoopEnabled: Bool?
     private var pendingRestoredIsPlaying: Bool?
+    private var pendingRestoredSelectedBookmarkID: BookmarkID?
     private var pendingBookmarkNavigationTime: PlaybackSeconds?
     private var clipSelectionStoreCache: [String: ClipSelection] = [:]
     private var clipPlaybackStoreCache: [String: ClipPlaybackState] = [:]
@@ -94,6 +95,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         let volume: Double
         let isLoopEnabled: Bool
         let isPlaying: Bool
+        let selectedBookmarkID: BookmarkID?
         let windowFrame: ClipWindowFrame?
     }
 
@@ -174,6 +176,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         pendingRestoredPlayhead = nil
         pendingRestoredLoopEnabled = nil
         pendingRestoredIsPlaying = nil
+        pendingRestoredSelectedBookmarkID = nil
         let storedRotation = storedRotationDegrees(for: normalizedURL)
         applyRotationDegrees(storedRotation)
         updateWindowTitle()
@@ -545,11 +548,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             self.timeLabel.stringValue = "\(Self.format(returnPosition)) / \(Self.format(duration))"
         }
         inlineTimelineView.onBookmarkSelectionChange = { [weak self] bookmarkID in
-            self?.selectedBookmarkID = bookmarkID
+            self?.setSelectedBookmarkID(bookmarkID, persistPlaybackState: true)
         }
         inlineTimelineView.onBookmarkDragBegan = { [weak self] bookmarkID in
             guard let self else { return }
-            self.selectedBookmarkID = bookmarkID
+            self.setSelectedBookmarkID(bookmarkID, persistPlaybackState: true)
             self.wasPlayingBeforeBookmarkDrag = self.engine.currentPlayer().rate != 0
             if self.wasPlayingBeforeBookmarkDrag {
                 self.engine.pause()
@@ -829,6 +832,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         pendingRestoredPlayhead = nil
         pendingRestoredLoopEnabled = nil
         pendingRestoredIsPlaying = nil
+        pendingRestoredSelectedBookmarkID = nil
         pendingBookmarkNavigationTime = nil
         hasStoredSelectionForCurrentClip = false
         selectionStart = 0
@@ -998,6 +1002,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             pendingRestoredPlayhead = max(restored.playhead, 0)
             pendingRestoredLoopEnabled = restored.isLoopEnabled
             pendingRestoredIsPlaying = isAutoplayEnabled ? restored.isPlaying : false
+            pendingRestoredSelectedBookmarkID = restored.selectedBookmarkID
         } else {
             volumeSlider.doubleValue = 1
             engine.setAudioGain(1)
@@ -1005,6 +1010,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             pendingRestoredPlayhead = nil
             pendingRestoredLoopEnabled = true
             pendingRestoredIsPlaying = isAutoplayEnabled
+            pendingRestoredSelectedBookmarkID = nil
         }
 
         applyPendingPlaybackRestorationIfPossible(duration: duration)
@@ -1046,6 +1052,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
                 engine.pause()
             }
         }
+
+        if let pendingRestoredSelectedBookmarkID {
+            self.pendingRestoredSelectedBookmarkID = nil
+            setSelectedBookmarkID(pendingRestoredSelectedBookmarkID)
+        }
     }
 
     private func applyPendingBookmarkNavigationIfPossible(duration: PlaybackSeconds) {
@@ -1077,10 +1088,12 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         window?.orderFront(nil)
+        setSelectedBookmarkID(bookmark.id, persistPlaybackState: true)
 
         if currentVideoURL?.path != targetURL.path {
             pendingBookmarkNavigationTime = bookmark.timeSeconds
             openVideo(url: targetURL, shouldRevealWindow: false)
+            setSelectedBookmarkID(bookmark.id, persistPlaybackState: true)
             applyPendingBookmarkNavigationIfPossible(duration: engine.currentDurationSeconds())
             return
         }
@@ -1106,10 +1119,21 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             .sorted()
         if let selectedBookmarkID,
            !currentClipBookmarks.contains(where: { $0.id == selectedBookmarkID }) {
-            self.selectedBookmarkID = nil
+            setSelectedBookmarkID(nil)
         }
         inlineTimelineView.bookmarks = currentClipBookmarks
         inlineTimelineView.selectedBookmarkID = selectedBookmarkID
+    }
+
+    private func setSelectedBookmarkID(_ bookmarkID: BookmarkID?, persistPlaybackState: Bool = false) {
+        guard selectedBookmarkID != bookmarkID else {
+            return
+        }
+        selectedBookmarkID = bookmarkID
+        inlineTimelineView.selectedBookmarkID = bookmarkID
+        if persistPlaybackState {
+            persistCurrentClipPlaybackStateIfNeeded()
+        }
     }
 
     private func jumpToAdjacentBookmark(direction: Int) {
@@ -1356,6 +1380,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             volume: min(max(volumeSlider.doubleValue, 0), maxVolumeGain),
             isLoopEnabled: isLoopEnabled,
             isPlaying: engine.currentPlayer().rate != 0,
+            selectedBookmarkID: selectedBookmarkID,
             windowFrame: currentPersistableWindowFrame()
         )
         lastPersistedPlaybackPlayhead = state.playhead

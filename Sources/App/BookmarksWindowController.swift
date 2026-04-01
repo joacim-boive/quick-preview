@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private static let reopenOnLaunchDefaultsKey = "reopenBookmarksWindowOnLaunch"
     private static let windowFrameDefaultsKey = "bookmarksWindowFrame"
+    private static let viewStateDefaultsKey = "bookmarksWindowViewState"
 
     private enum DisplayMode: Int {
         case bookmarks
@@ -94,6 +95,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private struct SavedViewState: Codable {
+        let scopeRawValue: Int
+        let displayModeRawValue: Int
+        let searchQuery: String
+        let selectedTags: [String]
+        let selectedBookmarkID: BookmarkID?
+    }
+
     private static let importedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -138,7 +147,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         installObservers()
         installEscKeyMonitor()
         installBookmarkNavigationMonitor()
-        reloadBookmarks()
+        if !restoreViewStateIfNeeded() {
+            reloadBookmarks()
+        }
     }
 
     @available(*, unavailable)
@@ -198,6 +209,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         dismissVisiblePreviewPanels()
         window?.makeFirstResponder(nil)
         persistWindowFrameIfNeeded()
+        persistViewStateIfNeeded()
         if !isPreparingForApplicationTermination {
             Self.storeShouldReopenOnLaunch(false)
         }
@@ -222,6 +234,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     func prepareForApplicationTermination() {
         isPreparingForApplicationTermination = true
         persistWindowFrameIfNeeded()
+        persistViewStateIfNeeded()
         Self.storeShouldReopenOnLaunch(window?.isVisible == true)
     }
 
@@ -281,6 +294,48 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
 
         window.setFrame(frame, display: false)
+    }
+
+    private func persistViewStateIfNeeded(defaults: UserDefaults = .standard) {
+        let selectedBookmarkID: BookmarkID? = {
+            guard tableView.selectedRowIndexes.count == 1,
+                  let selectedRow = tableView.selectedRowIndexes.first,
+                  selectedRow >= 0,
+                  selectedRow < bookmarks.count else {
+                return nil
+            }
+            return bookmarks[selectedRow].id
+        }()
+        let state = SavedViewState(
+            scopeRawValue: currentScope.rawValue,
+            displayModeRawValue: currentDisplayMode.rawValue,
+            searchQuery: searchField.stringValue,
+            selectedTags: selectedTags,
+            selectedBookmarkID: selectedBookmarkID
+        )
+        guard let data = try? JSONEncoder().encode(state) else {
+            return
+        }
+        defaults.set(data, forKey: Self.viewStateDefaultsKey)
+    }
+
+    @discardableResult
+    private func restoreViewStateIfNeeded(defaults: UserDefaults = .standard) -> Bool {
+        guard
+            let data = defaults.data(forKey: Self.viewStateDefaultsKey),
+            let state = try? JSONDecoder().decode(SavedViewState.self, from: data)
+        else {
+            return false
+        }
+        currentScope = BookmarkListScope(rawValue: state.scopeRawValue) ?? fallbackScopeForLockedSession()
+        currentDisplayMode = DisplayMode(rawValue: state.displayModeRawValue) ?? .bookmarks
+        selectedTags = state.selectedTags
+        searchField.stringValue = state.searchQuery
+        refreshScopeControl()
+        refreshDisplayModeUI()
+        modeControl.selectedSegment = currentDisplayMode.rawValue
+        reloadBookmarks(selecting: state.selectedBookmarkID)
+        return true
     }
 
     private func configureUI(on rootView: BookmarkDropView) {
@@ -828,12 +883,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private func handleScopeChanged(_ sender: NSSegmentedControl) {
         currentScope = BookmarkListScope(rawValue: sender.selectedSegment) ?? fallbackScopeForLockedSession()
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     @objc
     private func handleDisplayModeChanged(_ sender: NSSegmentedControl) {
         currentDisplayMode = DisplayMode(rawValue: sender.selectedSegment) ?? .bookmarks
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     @objc
@@ -844,6 +901,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
         selectedTags = []
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     @objc
@@ -1047,6 +1105,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             pendingRevealHighlightBookmarkID = bookmark.id
         }
         reloadBookmarks(selecting: bookmark.id)
+        persistViewStateIfNeeded()
     }
 
     private func flashRevealHighlight(forRow row: Int, bookmarkID: BookmarkID) {
@@ -1170,6 +1229,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     private func isTagSelected(_ tag: String) -> Bool {
@@ -1368,6 +1428,7 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
         guard window?.firstResponder !== tableView.currentEditor() else {
             return
         }
+        persistViewStateIfNeeded()
         openSelectedBookmark()
     }
 
@@ -1522,6 +1583,7 @@ extension BookmarksWindowController: NSSearchFieldDelegate, NSTextFieldDelegate 
             return
         }
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
