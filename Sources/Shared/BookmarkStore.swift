@@ -346,6 +346,20 @@ final class BookmarkStore {
         return bookmark
     }
 
+    /// Returns an existing bookmark for this file whose time is within `tolerance` seconds of `timeSeconds` (closest match).
+    func bookmarkNearPosition(
+        videoURL: URL,
+        timeSeconds: PlaybackSeconds,
+        tolerance: PlaybackSeconds = 0.05
+    ) -> Bookmark? {
+        loadCacheIfNeeded()
+        let path = videoURL.standardizedFileURL.path
+        let referenceTime = max(timeSeconds, 0)
+        return cache
+            .filter { $0.videoPath == path && abs($0.timeSeconds - referenceTime) <= tolerance }
+            .min(by: { abs($0.timeSeconds - referenceTime) < abs($1.timeSeconds - referenceTime) })
+    }
+
     @discardableResult
     func addImportedBookmarks(videoURLs: [URL]) -> [Bookmark] {
         let plan = prepareImportedMediaImport(videoURLs: videoURLs)

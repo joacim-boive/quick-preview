@@ -335,12 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let windowController {
             return windowController
         }
-        let controller = MainPlayerWindowController(bookmarkStore: bookmarkStore)
+        let controller = MainPlayerWindowController(
+            bookmarkStore: bookmarkStore,
+            thumbnailService: thumbnailService
+        )
         if let shortcutHintText {
             controller.setShortcutHint(shortcutHintText)
         }
-        controller.onShowBookmarksRequested = { [weak self] bookmark in
-            self?.showBookmarksWindow(selecting: bookmark)
+        controller.onShowBookmarksRequested = { [weak self] bookmark, highlightSelection in
+            self?.showBookmarksWindow(selecting: bookmark, highlightSelection: highlightSelection)
         }
         controller.onCurrentVideoURLChange = { [weak self] videoURL in
             self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
@@ -416,14 +419,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func showBookmarksWindow(selecting bookmark: Bookmark?) {
+    private func showBookmarksWindow(selecting bookmark: Bookmark?, highlightSelection: Bool = false) {
         let controller = ensureBookmarksWindowController()
         controller.setCurrentVideoURL(windowController?.loadedVideoURL())
         controller.showAndTrackWindow()
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         if let bookmark {
-            controller.revealBookmark(bookmark)
+            controller.revealBookmark(bookmark, highlight: highlightSelection)
         }
     }
 

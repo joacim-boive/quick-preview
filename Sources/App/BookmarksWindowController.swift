@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private static let reopenOnLaunchDefaultsKey = "reopenBookmarksWindowOnLaunch"
     private static let windowFrameDefaultsKey = "bookmarksWindowFrame"
+    private static let viewStateDefaultsKey = "bookmarksWindowViewState"
 
     private enum DisplayMode: Int {
         case bookmarks
@@ -94,6 +95,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private struct SavedViewState: Codable {
+        let scopeRawValue: Int
+        let displayModeRawValue: Int
+        let searchQuery: String
+        let selectedTags: [String]
+        let selectedBookmarkID: BookmarkID?
+    }
+
     private static let importedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -138,7 +147,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         installObservers()
         installEscKeyMonitor()
         installBookmarkNavigationMonitor()
-        reloadBookmarks()
+        if !restoreViewStateIfNeeded() {
+            reloadBookmarks()
+        }
     }
 
     @available(*, unavailable)
@@ -166,8 +177,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         reloadBookmarks()
     }
 
-    func revealBookmark(_ bookmark: Bookmark) {
-        revealBookmark(bookmark, preferredScope: nil, highlight: false)
+    func revealBookmark(_ bookmark: Bookmark, highlight: Bool = false) {
+        revealBookmark(bookmark, preferredScope: nil, highlight: highlight)
     }
 
     func navigateSelection(delta: Int) {
@@ -198,6 +209,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         dismissVisiblePreviewPanels()
         window?.makeFirstResponder(nil)
         persistWindowFrameIfNeeded()
+        persistViewStateIfNeeded()
         if !isPreparingForApplicationTermination {
             Self.storeShouldReopenOnLaunch(false)
         }
@@ -222,6 +234,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     func prepareForApplicationTermination() {
         isPreparingForApplicationTermination = true
         persistWindowFrameIfNeeded()
+        persistViewStateIfNeeded()
         Self.storeShouldReopenOnLaunch(window?.isVisible == true)
     }
 
@@ -281,6 +294,48 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
 
         window.setFrame(frame, display: false)
+    }
+
+    private func persistViewStateIfNeeded(defaults: UserDefaults = .standard) {
+        let selectedBookmarkID: BookmarkID? = {
+            guard tableView.selectedRowIndexes.count == 1,
+                  let selectedRow = tableView.selectedRowIndexes.first,
+                  selectedRow >= 0,
+                  selectedRow < bookmarks.count else {
+                return nil
+            }
+            return bookmarks[selectedRow].id
+        }()
+        let state = SavedViewState(
+            scopeRawValue: currentScope.rawValue,
+            displayModeRawValue: currentDisplayMode.rawValue,
+            searchQuery: searchField.stringValue,
+            selectedTags: selectedTags,
+            selectedBookmarkID: selectedBookmarkID
+        )
+        guard let data = try? JSONEncoder().encode(state) else {
+            return
+        }
+        defaults.set(data, forKey: Self.viewStateDefaultsKey)
+    }
+
+    @discardableResult
+    private func restoreViewStateIfNeeded(defaults: UserDefaults = .standard) -> Bool {
+        guard
+            let data = defaults.data(forKey: Self.viewStateDefaultsKey),
+            let state = try? JSONDecoder().decode(SavedViewState.self, from: data)
+        else {
+            return false
+        }
+        currentScope = BookmarkListScope(rawValue: state.scopeRawValue) ?? fallbackScopeForLockedSession()
+        currentDisplayMode = DisplayMode(rawValue: state.displayModeRawValue) ?? .bookmarks
+        selectedTags = state.selectedTags
+        searchField.stringValue = state.searchQuery
+        refreshScopeControl()
+        refreshDisplayModeUI()
+        modeControl.selectedSegment = currentDisplayMode.rawValue
+        reloadBookmarks(selecting: state.selectedBookmarkID)
+        return true
     }
 
     private func configureUI(on rootView: BookmarkDropView) {
@@ -828,12 +883,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private func handleScopeChanged(_ sender: NSSegmentedControl) {
         currentScope = BookmarkListScope(rawValue: sender.selectedSegment) ?? fallbackScopeForLockedSession()
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     @objc
     private func handleDisplayModeChanged(_ sender: NSSegmentedControl) {
         currentDisplayMode = DisplayMode(rawValue: sender.selectedSegment) ?? .bookmarks
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     @objc
@@ -844,6 +901,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         }
         selectedTags = []
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     @objc
@@ -1047,6 +1105,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             pendingRevealHighlightBookmarkID = bookmark.id
         }
         reloadBookmarks(selecting: bookmark.id)
+        persistViewStateIfNeeded()
     }
 
     private func flashRevealHighlight(forRow row: Int, bookmarkID: BookmarkID) {
@@ -1170,6 +1229,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             }
         }
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     private func isTagSelected(_ tag: String) -> Bool {
@@ -1368,6 +1428,7 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
         guard window?.firstResponder !== tableView.currentEditor() else {
             return
         }
+        persistViewStateIfNeeded()
         openSelectedBookmark()
     }
 
@@ -1522,6 +1583,7 @@ extension BookmarksWindowController: NSSearchFieldDelegate, NSTextFieldDelegate 
             return
         }
         reloadBookmarks()
+        persistViewStateIfNeeded()
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
@@ -2327,20 +2389,14 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
     private let instructionLabel = NSTextField(labelWithString: "Pick a frame from the same video to use as this bookmark thumbnail.")
     private let playerView = AVPlayerView(frame: .zero)
     private let candidateTimeLabel = NSTextField(labelWithString: "")
-    private let playPauseButton = NSButton(title: "", target: nil, action: nil)
-    private let slider = BookmarkPickerScrubSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
-    private let decrementLargeButton = NSButton(title: "-1s", target: nil, action: nil)
-    private let decrementSmallButton = NSButton(title: "-0.1s", target: nil, action: nil)
-    private let incrementSmallButton = NSButton(title: "+0.1s", target: nil, action: nil)
-    private let incrementLargeButton = NSButton(title: "+1s", target: nil, action: nil)
+    private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
     private var candidateTimeSeconds: PlaybackSeconds
     private var hasClosed = false
     private var durationLoadTask: Task<Void, Never>?
-    private var isScrubbing = false
-    private var wasPlayingBeforeScrub = false
+    private var wasPlayingBeforePlayheadDrag = false
 
     init(bookmark: Bookmark) {
         self.bookmarkID = bookmark.id
@@ -2365,7 +2421,6 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
         loadDuration()
         engine.attach(to: videoURL, autoplay: false)
         engine.seekTo(seconds: candidateTimeSeconds)
-        updatePlayPauseButton()
     }
 
     @available(*, unavailable)
@@ -2405,50 +2460,46 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
         playerView.layer?.cornerRadius = 10
         playerView.layer?.masksToBounds = true
 
+        let playerClick = NSClickGestureRecognizer(target: self, action: #selector(handlePlayerSurfaceClick(_:)))
+        playerView.addGestureRecognizer(playerClick)
+
         candidateTimeLabel.translatesAutoresizingMaskIntoConstraints = false
         candidateTimeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 
-        playPauseButton.translatesAutoresizingMaskIntoConstraints = false
-        playPauseButton.bezelStyle = .rounded
-        playPauseButton.target = self
-        playPauseButton.action = #selector(handlePlayPause(_:))
-
-        slider.translatesAutoresizingMaskIntoConstraints = false
-        slider.target = self
-        slider.action = #selector(handleSliderChanged(_:))
-        slider.isContinuous = true
-        slider.minValue = 0
-        slider.maxValue = max(durationSeconds, max(candidateTimeSeconds, originalBookmarkTimeSeconds), 1)
-        slider.doubleValue = candidateTimeSeconds
-        slider.isEnabled = slider.maxValue > 0
-        slider.onScrubBegan = { [weak self] in
-            self?.beginScrubbing()
+        inlineTimelineView.translatesAutoresizingMaskIntoConstraints = false
+        inlineTimelineView.showsTrimControls = false
+        inlineTimelineView.bookmarks = []
+        inlineTimelineView.duration = max(durationSeconds, max(candidateTimeSeconds, originalBookmarkTimeSeconds), 1)
+        inlineTimelineView.selectionStart = 0
+        inlineTimelineView.selectionEnd = inlineTimelineView.duration
+        inlineTimelineView.currentPosition = candidateTimeSeconds
+        inlineTimelineView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        inlineTimelineView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        inlineTimelineView.onSeekBegan = { [weak self] in
+            guard let self else { return }
+            self.wasPlayingBeforePlayheadDrag = self.engine.currentPlayer().rate != 0
+            if self.wasPlayingBeforePlayheadDrag {
+                self.engine.pause()
+            }
+            self.engine.beginScrubbing()
         }
-        slider.onScrubEnded = { [weak self] seconds in
-            self?.endScrubbing(at: seconds)
+        inlineTimelineView.onSeekChanged = { [weak self] seconds in
+            guard let self else { return }
+            self.candidateTimeSeconds = self.clampedTime(seconds)
+            self.updateDisplayedCandidateTime()
+            self.engine.scrub(to: self.candidateTimeSeconds)
         }
-
-        for button in [decrementLargeButton, decrementSmallButton, incrementSmallButton, incrementLargeButton] {
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.bezelStyle = .rounded
-            button.target = self
+        inlineTimelineView.onSeekEnded = { [weak self] seconds in
+            guard let self else { return }
+            self.candidateTimeSeconds = self.clampedTime(seconds)
+            self.inlineTimelineView.currentPosition = self.candidateTimeSeconds
+            self.updateDisplayedCandidateTime()
+            self.engine.endScrubbing(at: self.candidateTimeSeconds)
+            if self.wasPlayingBeforePlayheadDrag {
+                self.engine.play()
+            }
+            self.wasPlayingBeforePlayheadDrag = false
         }
-        decrementLargeButton.action = #selector(handleDecrementLarge(_:))
-        decrementSmallButton.action = #selector(handleDecrementSmall(_:))
-        incrementSmallButton.action = #selector(handleIncrementSmall(_:))
-        incrementLargeButton.action = #selector(handleIncrementLarge(_:))
-
-        let stepButtonsRow = NSStackView(views: [
-            playPauseButton,
-            decrementLargeButton,
-            decrementSmallButton,
-            incrementSmallButton,
-            incrementLargeButton
-        ])
-        stepButtonsRow.translatesAutoresizingMaskIntoConstraints = false
-        stepButtonsRow.orientation = .horizontal
-        stepButtonsRow.alignment = .centerY
-        stepButtonsRow.spacing = 8
 
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         cancelButton.bezelStyle = .rounded
@@ -2470,8 +2521,7 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
         rootStack.addArrangedSubview(instructionLabel)
         rootStack.addArrangedSubview(playerView)
         rootStack.addArrangedSubview(candidateTimeLabel)
-        rootStack.addArrangedSubview(slider)
-        rootStack.addArrangedSubview(stepButtonsRow)
+        rootStack.addArrangedSubview(inlineTimelineView)
         rootStack.addArrangedSubview(actionsRow)
 
         contentView.addSubview(rootStack)
@@ -2485,7 +2535,8 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
             playerView.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
             playerView.heightAnchor.constraint(equalToConstant: 320),
 
-            slider.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
+            inlineTimelineView.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
+            inlineTimelineView.heightAnchor.constraint(equalToConstant: 36),
             instructionLabel.widthAnchor.constraint(equalTo: rootStack.widthAnchor)
         ])
     }
@@ -2495,49 +2546,17 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
             guard let self else { return }
             if abs(position.duration - self.durationSeconds) > 0.01 {
                 self.durationSeconds = position.duration
-                self.slider.maxValue = max(position.duration, max(self.candidateTimeSeconds, self.originalBookmarkTimeSeconds), 1)
-                self.slider.isEnabled = self.slider.maxValue > 0
+                let d = max(position.duration, max(self.candidateTimeSeconds, self.originalBookmarkTimeSeconds), 1)
+                self.inlineTimelineView.duration = d
+                self.inlineTimelineView.selectionEnd = d
+            }
+            guard !self.inlineTimelineView.isDraggingPlayhead else {
+                return
             }
             self.candidateTimeSeconds = position.seconds
-            self.slider.doubleValue = position.seconds
+            self.inlineTimelineView.currentPosition = position.seconds
             self.updateDisplayedCandidateTime()
-            self.updatePlayPauseButton()
         }
-    }
-
-    @objc
-    private func handleSliderChanged(_ sender: NSSlider) {
-        candidateTimeSeconds = clampedTime(sender.doubleValue)
-        updateDisplayedCandidateTime()
-        if isScrubbing {
-            engine.scrub(to: candidateTimeSeconds)
-        } else {
-            engine.seekTo(seconds: candidateTimeSeconds)
-        }
-    }
-
-    @objc
-    private func handleDecrementLarge(_ sender: Any?) {
-        _ = sender
-        nudgeCandidateTime(by: -1)
-    }
-
-    @objc
-    private func handleDecrementSmall(_ sender: Any?) {
-        _ = sender
-        nudgeCandidateTime(by: -0.1)
-    }
-
-    @objc
-    private func handleIncrementSmall(_ sender: Any?) {
-        _ = sender
-        nudgeCandidateTime(by: 0.1)
-    }
-
-    @objc
-    private func handleIncrementLarge(_ sender: Any?) {
-        _ = sender
-        nudgeCandidateTime(by: 1)
     }
 
     @objc
@@ -2554,21 +2573,13 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
     }
 
     @objc
-    private func handlePlayPause(_ sender: Any?) {
+    private func handlePlayerSurfaceClick(_ sender: NSClickGestureRecognizer) {
         _ = sender
         engine.togglePlayPause()
-        updatePlayPauseButton()
     }
 
     func cancelAndClose() {
         closeSheet()
-    }
-
-    private func nudgeCandidateTime(by deltaSeconds: PlaybackSeconds) {
-        candidateTimeSeconds = clampedTime(candidateTimeSeconds + deltaSeconds)
-        slider.doubleValue = candidateTimeSeconds
-        updateDisplayedCandidateTime()
-        engine.seekTo(seconds: candidateTimeSeconds)
     }
 
     private func clampedTime(_ rawTime: PlaybackSeconds) -> PlaybackSeconds {
@@ -2605,8 +2616,10 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
             await MainActor.run {
                 guard let self else { return }
                 self.durationSeconds = duration
-                self.slider.maxValue = max(duration, max(self.candidateTimeSeconds, self.originalBookmarkTimeSeconds), 1)
-                self.slider.isEnabled = self.slider.maxValue > 0
+                let d = max(duration, max(self.candidateTimeSeconds, self.originalBookmarkTimeSeconds), 1)
+                self.inlineTimelineView.duration = d
+                self.inlineTimelineView.selectionEnd = d
+                self.inlineTimelineView.isControlEnabled = d > 0
                 self.updateDisplayedCandidateTime()
             }
         }
@@ -2638,55 +2651,9 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
         onClose?(self)
     }
 
-    private func beginScrubbing() {
-        guard !isScrubbing else { return }
-        isScrubbing = true
-        wasPlayingBeforeScrub = engine.currentPlayer().rate != 0
-        if wasPlayingBeforeScrub {
-            engine.pause()
-        }
-        engine.beginScrubbing()
-    }
-
-    private func endScrubbing(at seconds: PlaybackSeconds) {
-        guard isScrubbing else {
-            engine.seekTo(seconds: clampedTime(seconds))
-            return
-        }
-        candidateTimeSeconds = clampedTime(seconds)
-        slider.doubleValue = candidateTimeSeconds
-        engine.endScrubbing(at: candidateTimeSeconds)
-        if wasPlayingBeforeScrub {
-            engine.play()
-        }
-        wasPlayingBeforeScrub = false
-        isScrubbing = false
-        updatePlayPauseButton()
-    }
-
-    private func updatePlayPauseButton() {
-        let symbolName = engine.currentPlayer().rate == 0 ? "play.fill" : "pause.fill"
-        playPauseButton.image = NSImage(
-            systemSymbolName: symbolName,
-            accessibilityDescription: "Play Pause"
-        )
-        playPauseButton.imagePosition = .imageOnly
-    }
-
     private static func displayTimestamp(for seconds: PlaybackSeconds) -> String {
         let clampedSeconds = max(seconds, 0)
         return "\(BookmarkStore.formattedTimestamp(clampedSeconds)) (\(String(format: "%.2fs", clampedSeconds)))"
-    }
-}
-
-private final class BookmarkPickerScrubSlider: NSSlider {
-    var onScrubBegan: (() -> Void)?
-    var onScrubEnded: ((PlaybackSeconds) -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        onScrubBegan?()
-        super.mouseDown(with: event)
-        onScrubEnded?(doubleValue)
     }
 }
 
