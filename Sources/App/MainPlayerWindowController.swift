@@ -2,7 +2,7 @@ import Cocoa
 import AVFoundation
 import UniformTypeIdentifiers
 
-private struct BookmarkTimelineMarker: Equatable, Comparable {
+struct BookmarkTimelineMarker: Equatable, Comparable {
     let id: BookmarkID
     let timeSeconds: PlaybackSeconds
 
@@ -1800,7 +1800,7 @@ private final class BookmarkTimelineMarkerHoverPreviewController {
     }()
 }
 
-private final class InlineSelectionTimelineView: NSView {
+final class InlineSelectionTimelineView: NSView {
     enum DragTarget: Equatable {
         case playhead
         case startHandle
@@ -1890,6 +1890,15 @@ private final class InlineSelectionTimelineView: NSView {
         }
     }
 
+    /// When false, hides the in/out selection range UI and trim handles; only the playhead is interactive. Timeline look (gray track, blue to playhead) is the same in both modes.
+    var showsTrimControls: Bool = true {
+        didSet {
+            updateAppearance()
+            updateLayerFrames()
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
     private var dragTarget: DragTarget?
     private var pendingPrecisionActivation: PendingPrecisionActivation?
     private var precisionZoomState: PrecisionZoomState?
@@ -1897,6 +1906,7 @@ private final class InlineSelectionTimelineView: NSView {
     private var hoveredBookmarkID: BookmarkID?
     private var hoverTrackingArea: NSTrackingArea?
     private let trackLayer = CALayer()
+    private let playedProgressLayer = CALayer()
     private let selectionLayer = CALayer()
     private let playheadLayer = CALayer()
     private let startHandleLayer = CALayer()
@@ -1904,6 +1914,7 @@ private final class InlineSelectionTimelineView: NSView {
     private var bookmarkMarkerLayers: [CALayer] = []
     private let precisionActivationDelay: TimeInterval = 1.0
     private let precisionActivationMovementTolerance: CGFloat = 6
+    private let trimHandleOpacityWhileDragging: CGFloat = 0.28
     private let precisionZoomFactor: PlaybackSeconds = 10
     private let minimumPrecisionVisibleDuration: PlaybackSeconds = 1
     private let maximumPrecisionVisibleDuration: PlaybackSeconds = 20
@@ -2018,6 +2029,7 @@ private final class InlineSelectionTimelineView: NSView {
             clearPrecisionInteractionState()
         }
         dragTarget = nil
+        updateLayerFrames()
         let hoverPoint = convert(event.locationInWindow, from: nil)
         updateBookmarkHover(at: hoverPoint)
     }
@@ -2026,18 +2038,22 @@ private final class InlineSelectionTimelineView: NSView {
         guard let rootLayer = layer else { return }
 
         trackLayer.cornerRadius = 4
+        playedProgressLayer.cornerRadius = 4
         selectionLayer.cornerRadius = 4
         playheadLayer.cornerRadius = 2
         startHandleLayer.cornerRadius = 8
         endHandleLayer.cornerRadius = 8
 
-        [trackLayer, selectionLayer, playheadLayer, startHandleLayer, endHandleLayer].forEach {
+        [trackLayer, playedProgressLayer, selectionLayer, playheadLayer, startHandleLayer, endHandleLayer].forEach {
             $0.actions = [
                 "position": NSNull(),
                 "bounds": NSNull(),
                 "frame": NSNull(),
                 "backgroundColor": NSNull(),
-                "cornerRadius": NSNull()
+                "cornerRadius": NSNull(),
+                "opacity": NSNull(),
+                "borderWidth": NSNull(),
+                "borderColor": NSNull()
             ]
             rootLayer.addSublayer($0)
         }
@@ -2047,16 +2063,14 @@ private final class InlineSelectionTimelineView: NSView {
     private func updateAppearance() {
         let isPrecisionActive = precisionZoomState != nil
         trackLayer.backgroundColor = NSColor(
+            calibratedWhite: 0.42,
+            alpha: isControlEnabled ? (isPrecisionActive ? 0.38 : 0.28) : 0.14
+        ).cgColor
+        playedProgressLayer.backgroundColor = NSColor(
             calibratedRed: 0.18,
             green: 0.45,
             blue: 0.91,
-            alpha: isControlEnabled ? (isPrecisionActive ? 0.68 : 0.45) : 0.2
-        ).cgColor
-        selectionLayer.backgroundColor = NSColor(
-            calibratedRed: 0.27,
-            green: 0.58,
-            blue: 0.98,
-            alpha: isControlEnabled ? (isPrecisionActive ? 1.0 : 0.95) : 0.35
+            alpha: isControlEnabled ? (isPrecisionActive ? 0.85 : 0.72) : 0.22
         ).cgColor
         playheadLayer.backgroundColor = NSColor.white.withAlphaComponent(isControlEnabled ? 0.95 : 0.5).cgColor
         startHandleLayer.backgroundColor = NSColor(calibratedWhite: 0.88, alpha: isControlEnabled ? 1 : 0.45).cgColor
@@ -2081,20 +2095,29 @@ private final class InlineSelectionTimelineView: NSView {
         let trackRect = self.trackRect
         let visibleRange = timelineVisibleRange()
         trackLayer.frame = CGRect(x: trackRect.minX, y: trackRect.minY, width: max(trackRect.width, 0), height: trackRect.height)
-        let clippedSelectionStart = max(selectionStart, visibleRange.lowerBound)
-        let clippedSelectionEnd = min(selectionEnd, visibleRange.upperBound)
-        if clippedSelectionEnd > clippedSelectionStart {
-            selectionLayer.frame = CGRect(
-                x: xPosition(for: clippedSelectionStart),
-                y: trackRect.minY,
-                width: abs(xPosition(for: clippedSelectionEnd) - xPosition(for: clippedSelectionStart)),
-                height: trackRect.height
-            )
-            selectionLayer.isHidden = false
-        } else {
-            selectionLayer.frame = .zero
-            selectionLayer.isHidden = precisionZoomState != nil
+
+        // Blue extent follows the playhead, or—while dragging trim handles—the handle under the pointer (same feedback as playhead scrub).
+        let playedProgressTime: PlaybackSeconds
+        switch dragTarget {
+        case .startHandle:
+            playedProgressTime = selectionStart
+        case .endHandle:
+            playedProgressTime = selectionEnd
+        default:
+            playedProgressTime = currentPosition
         }
+        let playedExtentX = xPosition(for: playedProgressTime)
+        let playedWidth = min(max(playedExtentX - trackRect.minX, 0), trackRect.width)
+        playedProgressLayer.isHidden = false
+        playedProgressLayer.frame = CGRect(
+            x: trackRect.minX,
+            y: trackRect.minY,
+            width: playedWidth,
+            height: trackRect.height
+        )
+
+        selectionLayer.frame = .zero
+        selectionLayer.isHidden = true
 
         let playheadWidth: CGFloat = precisionZoomState != nil ? 5 : 4
         playheadLayer.frame = CGRect(
@@ -2106,8 +2129,10 @@ private final class InlineSelectionTimelineView: NSView {
         startHandleLayer.frame = handleRect(at: startX)
         endHandleLayer.frame = handleRect(at: endX)
         playheadLayer.isHidden = !isMarkerVisible(currentPosition, in: visibleRange, marker: .playhead)
-        startHandleLayer.isHidden = !isMarkerVisible(selectionStart, in: visibleRange, marker: .startHandle)
-        endHandleLayer.isHidden = !isMarkerVisible(selectionEnd, in: visibleRange, marker: .endHandle)
+        startHandleLayer.isHidden = !showsTrimControls
+            || !isMarkerVisible(selectionStart, in: visibleRange, marker: .startHandle)
+        endHandleLayer.isHidden = !showsTrimControls
+            || !isMarkerVisible(selectionEnd, in: visibleRange, marker: .endHandle)
         let epsilon: PlaybackSeconds = 0.0001
         for (index, markerLayer) in bookmarkMarkerLayers.enumerated() {
             let bookmark = bookmarks[index]
@@ -2121,11 +2146,24 @@ private final class InlineSelectionTimelineView: NSView {
             markerLayer.frame = bookmarkRect(for: bookmark)
         }
         updateLayerOrdering()
+        updateTrimHandleDragVisuals()
         window?.invalidateCursorRects(for: self)
         if let hoveredBookmarkID, let bookmark = bookmarks.first(where: { $0.id == hoveredBookmarkID }) {
             let rectInWindow = convert(bookmarkRect(for: bookmark), to: nil)
             onBookmarkMarkerHoverMove?(hoveredBookmarkID, rectInWindow)
         }
+    }
+
+    private func updateTrimHandleDragVisuals() {
+        guard showsTrimControls else {
+            startHandleLayer.opacity = 1
+            endHandleLayer.opacity = 1
+            return
+        }
+        let draggingStart = dragTarget == .startHandle
+        let draggingEnd = dragTarget == .endHandle
+        startHandleLayer.opacity = draggingStart ? Float(trimHandleOpacityWhileDragging) : 1
+        endHandleLayer.opacity = draggingEnd ? Float(trimHandleOpacityWhileDragging) : 1
     }
 
     private var trackRect: CGRect {
@@ -2303,8 +2341,14 @@ private final class InlineSelectionTimelineView: NSView {
         let referenceMarkers: [(target: DragTarget, value: PlaybackSeconds)]
         switch dragTarget {
         case .playhead:
-            referenceMarkers = [(.startHandle, selectionStart), (.endHandle, selectionEnd)] + bookmarks.map {
-                (.bookmark($0.id), $0.timeSeconds)
+            if showsTrimControls {
+                referenceMarkers = [(.startHandle, selectionStart), (.endHandle, selectionEnd)] + bookmarks.map {
+                    (.bookmark($0.id), $0.timeSeconds)
+                }
+            } else {
+                referenceMarkers = bookmarks.map {
+                    (.bookmark($0.id), $0.timeSeconds)
+                }
             }
         case .startHandle:
             referenceMarkers = [(.playhead, currentPosition), (.endHandle, selectionEnd)] + bookmarks.map {
@@ -2315,11 +2359,15 @@ private final class InlineSelectionTimelineView: NSView {
                 (.bookmark($0.id), $0.timeSeconds)
             }
         case let .bookmark(bookmarkID):
-            referenceMarkers = [(.playhead, currentPosition), (.startHandle, selectionStart), (.endHandle, selectionEnd)]
-                + bookmarks.compactMap { bookmark in
-                    guard bookmark.id != bookmarkID else { return nil }
-                    return (.bookmark(bookmark.id), bookmark.timeSeconds)
-                }
+            var markers: [(target: DragTarget, value: PlaybackSeconds)] = [(.playhead, currentPosition)]
+            if showsTrimControls {
+                markers.append(contentsOf: [(.startHandle, selectionStart), (.endHandle, selectionEnd)])
+            }
+            markers.append(contentsOf: bookmarks.compactMap { bookmark in
+                guard bookmark.id != bookmarkID else { return nil }
+                return (.bookmark(bookmark.id), bookmark.timeSeconds)
+            })
+            referenceMarkers = markers
         }
 
         return referenceMarkers.min { lhs, rhs in
@@ -2329,6 +2377,7 @@ private final class InlineSelectionTimelineView: NSView {
 
     private func updateLayerOrdering() {
         trackLayer.zPosition = 0
+        playedProgressLayer.zPosition = 0.5
         selectionLayer.zPosition = 1
         for (index, markerLayer) in bookmarkMarkerLayers.enumerated() {
             let bookmark = bookmarks[index]
@@ -2390,12 +2439,14 @@ private final class InlineSelectionTimelineView: NSView {
             return .bookmark(selectedBookmarkID)
         }
 
-        if handleRect(at: startX).insetBy(dx: -6, dy: -4).contains(point) {
-            return .startHandle
-        }
+        if showsTrimControls {
+            if handleRect(at: startX).insetBy(dx: -6, dy: -4).contains(point) {
+                return .startHandle
+            }
 
-        if handleRect(at: endX).insetBy(dx: -6, dy: -4).contains(point) {
-            return .endHandle
+            if handleRect(at: endX).insetBy(dx: -6, dy: -4).contains(point) {
+                return .endHandle
+            }
         }
 
         if playheadRect(at: xPosition(for: currentPosition)).insetBy(dx: -5, dy: -4).contains(point) {
