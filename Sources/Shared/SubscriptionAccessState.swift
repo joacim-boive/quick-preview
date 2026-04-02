@@ -14,6 +14,10 @@ struct EntitlementSnapshot: Codable, Equatable {
     let expirationDate: Date?
     let transactionID: UInt64?
     let originalTransactionID: UInt64?
+
+    func matches(productID: String) -> Bool {
+        self.productID == productID
+    }
 }
 
 enum SubscriptionAccessState: Equatable {

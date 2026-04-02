@@ -17,23 +17,34 @@ final class PaywallWindowController: NSWindowController {
     var onShowHelp: (() -> Void)?
     var onQuit: (() -> Void)?
 
+    private let backgroundView = NSVisualEffectView()
+    private let cardContainer = NSView()
+    private let appIconView = NSImageView()
+    private let eyebrowLabel = NSTextField(labelWithString: "QuickPreview")
     private let titleLabel = NSTextField(labelWithString: "")
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
+    private let planCard = NSView()
+    private let planNameLabel = NSTextField(labelWithString: "")
+    private let planSubtitleLabel = NSTextField(labelWithString: "Then billed monthly unless canceled")
     private let priceLabel = NSTextField(labelWithString: "")
+    private let trustLabel = NSTextField(
+        wrappingLabelWithString: "Payment is handled by Apple. The subscription renews automatically unless canceled at least 24 hours before the current period ends."
+    )
     private let progressIndicator = NSProgressIndicator()
     private let subscribeButton = NSButton(title: "", target: nil, action: nil)
+    private let secondaryActionsContainer = NSView()
+    private let secondaryButtonRow = NSStackView()
     private let restoreButton = NSButton(title: "Restore Purchases", target: nil, action: nil)
     private let manageButton = NSButton(title: "Manage Subscription", target: nil, action: nil)
     private let helpButton = NSButton(title: "Help", target: nil, action: nil)
     private let quitButton = NSButton(title: "Quit", target: nil, action: nil)
-    private let buttonStack = NSStackView()
 
     private var mode: PaywallPresentationMode = .loading
     private var isBusy = false
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -55,109 +66,280 @@ final class PaywallWindowController: NSWindowController {
             return
         }
 
-        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
-        titleLabel.alignment = .center
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
 
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        backgroundView.material = .sidebar
+        backgroundView.state = .active
+        backgroundView.blendingMode = .behindWindow
+        contentView.addSubview(backgroundView)
+
+        cardContainer.translatesAutoresizingMaskIntoConstraints = false
+        cardContainer.wantsLayer = true
+        cardContainer.layer?.cornerRadius = 24
+        cardContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
+        cardContainer.layer?.borderWidth = 1
+        cardContainer.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
+        backgroundView.addSubview(cardContainer)
+
+        appIconView.translatesAutoresizingMaskIntoConstraints = false
+        appIconView.imageScaling = .scaleProportionallyUpOrDown
+        appIconView.image = NSApp.applicationIconImage
+        appIconView.wantsLayer = true
+        appIconView.layer?.cornerRadius = 18
+        cardContainer.addSubview(appIconView)
+
+        eyebrowLabel.translatesAutoresizingMaskIntoConstraints = false
+        eyebrowLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        eyebrowLabel.textColor = .secondaryLabelColor
+        cardContainer.addSubview(eyebrowLabel)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 30, weight: .bold)
+        titleLabel.alignment = .center
+        titleLabel.lineBreakMode = .byWordWrapping
+        titleLabel.maximumNumberOfLines = 2
+        cardContainer.addSubview(titleLabel)
+
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
         messageLabel.font = .systemFont(ofSize: 14, weight: .regular)
         messageLabel.alignment = .center
         messageLabel.maximumNumberOfLines = 0
         messageLabel.textColor = .secondaryLabelColor
+        cardContainer.addSubview(messageLabel)
 
-        priceLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        priceLabel.alignment = .center
-        priceLabel.textColor = .labelColor
+        configurePlanCard()
+        cardContainer.addSubview(planCard)
 
+        progressIndicator.translatesAutoresizingMaskIntoConstraints = false
         progressIndicator.style = .spinning
         progressIndicator.controlSize = .regular
-        progressIndicator.translatesAutoresizingMaskIntoConstraints = false
+        cardContainer.addSubview(progressIndicator)
 
+        subscribeButton.translatesAutoresizingMaskIntoConstraints = false
         subscribeButton.target = self
         subscribeButton.action = #selector(handleSubscribe(_:))
-        subscribeButton.bezelStyle = .rounded
+        subscribeButton.bezelStyle = .regularSquare
+        subscribeButton.setButtonType(.momentaryPushIn)
+        subscribeButton.controlSize = .large
         subscribeButton.keyEquivalent = "\r"
+        subscribeButton.contentTintColor = .white
+        if #available(macOS 11.0, *) {
+            subscribeButton.hasDestructiveAction = false
+        }
+        cardContainer.addSubview(subscribeButton)
 
-        restoreButton.target = self
-        restoreButton.action = #selector(handleRestore(_:))
-        restoreButton.bezelStyle = .rounded
+        configureSecondaryButtons()
+        cardContainer.addSubview(secondaryActionsContainer)
 
-        manageButton.target = self
-        manageButton.action = #selector(handleManage(_:))
-        manageButton.bezelStyle = .rounded
-
-        helpButton.target = self
-        helpButton.action = #selector(handleHelp(_:))
-        helpButton.bezelStyle = .rounded
-
+        quitButton.translatesAutoresizingMaskIntoConstraints = false
         quitButton.target = self
         quitButton.action = #selector(handleQuit(_:))
-        quitButton.bezelStyle = .rounded
-
-        buttonStack.orientation = .vertical
-        buttonStack.spacing = 10
-        buttonStack.alignment = .centerX
-        buttonStack.translatesAutoresizingMaskIntoConstraints = false
-        [
-            subscribeButton,
-            restoreButton,
-            manageButton,
-            helpButton,
-            quitButton
-        ].forEach(buttonStack.addArrangedSubview(_:))
-
-        let contentStack = NSStackView(views: [
-            titleLabel,
-            messageLabel,
-            priceLabel,
-            progressIndicator,
-            buttonStack
-        ])
-        contentStack.orientation = .vertical
-        contentStack.alignment = .centerX
-        contentStack.spacing = 18
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-
-        contentView.addSubview(contentStack)
+        quitButton.isBordered = false
+        quitButton.font = .systemFont(ofSize: 13, weight: .regular)
+        quitButton.contentTintColor = .secondaryLabelColor
+        cardContainer.addSubview(quitButton)
 
         NSLayoutConstraint.activate([
-            contentStack.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            contentStack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 24),
-            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -24),
-            messageLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
+            backgroundView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            backgroundView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            cardContainer.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 28),
+            cardContainer.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -28),
+            cardContainer.topAnchor.constraint(equalTo: backgroundView.topAnchor, constant: 24),
+            cardContainer.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: -24),
+
+            appIconView.topAnchor.constraint(equalTo: cardContainer.topAnchor, constant: 28),
+            appIconView.centerXAnchor.constraint(equalTo: cardContainer.centerXAnchor),
+            appIconView.widthAnchor.constraint(equalToConstant: 72),
+            appIconView.heightAnchor.constraint(equalToConstant: 72),
+
+            eyebrowLabel.topAnchor.constraint(equalTo: appIconView.bottomAnchor, constant: 16),
+            eyebrowLabel.centerXAnchor.constraint(equalTo: cardContainer.centerXAnchor),
+
+            titleLabel.topAnchor.constraint(equalTo: eyebrowLabel.bottomAnchor, constant: 8),
+            titleLabel.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor, constant: 36),
+            titleLabel.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -36),
+
+            messageLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
+            messageLabel.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor, constant: 48),
+            messageLabel.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -48),
+
+            planCard.topAnchor.constraint(equalTo: messageLabel.bottomAnchor, constant: 24),
+            planCard.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor, constant: 44),
+            planCard.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -44),
+
+            progressIndicator.topAnchor.constraint(equalTo: planCard.bottomAnchor, constant: 18),
+            progressIndicator.centerXAnchor.constraint(equalTo: cardContainer.centerXAnchor),
+
+            subscribeButton.topAnchor.constraint(equalTo: progressIndicator.bottomAnchor, constant: 18),
+            subscribeButton.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor, constant: 28),
+            subscribeButton.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -28),
+            subscribeButton.heightAnchor.constraint(equalToConstant: 44),
+
+            secondaryActionsContainer.topAnchor.constraint(equalTo: subscribeButton.bottomAnchor, constant: 14),
+            secondaryActionsContainer.centerXAnchor.constraint(equalTo: cardContainer.centerXAnchor),
+
+            secondaryButtonRow.leadingAnchor.constraint(equalTo: secondaryActionsContainer.leadingAnchor, constant: 12),
+            secondaryButtonRow.trailingAnchor.constraint(equalTo: secondaryActionsContainer.trailingAnchor, constant: -12),
+            secondaryButtonRow.topAnchor.constraint(equalTo: secondaryActionsContainer.topAnchor, constant: 12),
+            secondaryButtonRow.bottomAnchor.constraint(equalTo: secondaryActionsContainer.bottomAnchor, constant: -12),
+
+            quitButton.topAnchor.constraint(equalTo: secondaryActionsContainer.bottomAnchor, constant: 14),
+            quitButton.centerXAnchor.constraint(equalTo: cardContainer.centerXAnchor),
+            quitButton.bottomAnchor.constraint(lessThanOrEqualTo: cardContainer.bottomAnchor, constant: -18)
         ])
 
         render()
     }
 
+    private func configurePlanCard() {
+        planCard.translatesAutoresizingMaskIntoConstraints = false
+        planCard.wantsLayer = true
+        planCard.layer?.cornerRadius = 18
+        planCard.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
+        planCard.layer?.borderWidth = 1
+        planCard.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
+
+        planNameLabel.translatesAutoresizingMaskIntoConstraints = false
+        planNameLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+
+        planSubtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        planSubtitleLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        planSubtitleLabel.textColor = .secondaryLabelColor
+
+        priceLabel.translatesAutoresizingMaskIntoConstraints = false
+        priceLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        priceLabel.alignment = .right
+
+        trustLabel.translatesAutoresizingMaskIntoConstraints = false
+        trustLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        trustLabel.textColor = .secondaryLabelColor
+        trustLabel.maximumNumberOfLines = 0
+
+        planCard.addSubview(planNameLabel)
+        planCard.addSubview(planSubtitleLabel)
+        planCard.addSubview(priceLabel)
+        planCard.addSubview(trustLabel)
+
+        NSLayoutConstraint.activate([
+            planNameLabel.topAnchor.constraint(equalTo: planCard.topAnchor, constant: 16),
+            planNameLabel.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 16),
+            planNameLabel.trailingAnchor.constraint(lessThanOrEqualTo: priceLabel.leadingAnchor, constant: -12),
+
+            priceLabel.firstBaselineAnchor.constraint(equalTo: planNameLabel.firstBaselineAnchor),
+            priceLabel.trailingAnchor.constraint(equalTo: planCard.trailingAnchor, constant: -16),
+
+            planSubtitleLabel.topAnchor.constraint(equalTo: planNameLabel.bottomAnchor, constant: 4),
+            planSubtitleLabel.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 16),
+            planSubtitleLabel.trailingAnchor.constraint(equalTo: planCard.trailingAnchor, constant: -16),
+
+            trustLabel.topAnchor.constraint(equalTo: planSubtitleLabel.bottomAnchor, constant: 12),
+            trustLabel.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 16),
+            trustLabel.trailingAnchor.constraint(equalTo: planCard.trailingAnchor, constant: -16),
+            trustLabel.bottomAnchor.constraint(equalTo: planCard.bottomAnchor, constant: -16)
+        ])
+    }
+
+    private func configureSecondaryButtons() {
+        secondaryActionsContainer.translatesAutoresizingMaskIntoConstraints = false
+        secondaryActionsContainer.wantsLayer = true
+        secondaryActionsContainer.layer?.cornerRadius = 12
+        secondaryActionsContainer.layer?.backgroundColor = NSColor.underPageBackgroundColor.withAlphaComponent(0.45).cgColor
+        secondaryActionsContainer.layer?.borderWidth = 1
+        secondaryActionsContainer.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.18).cgColor
+
+        [restoreButton].forEach { button in
+            button.target = self
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 13, weight: .medium)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.setButtonType(.momentaryPushIn)
+            if #available(macOS 11.0, *) {
+                button.bezelColor = NSColor.controlBackgroundColor.withAlphaComponent(0.9)
+            }
+        }
+
+        restoreButton.action = #selector(handleRestore(_:))
+        manageButton.action = #selector(handleManage(_:))
+        helpButton.action = #selector(handleHelp(_:))
+
+        secondaryButtonRow.translatesAutoresizingMaskIntoConstraints = false
+        secondaryButtonRow.orientation = .horizontal
+        secondaryButtonRow.alignment = .centerY
+        secondaryButtonRow.distribution = .fillProportionally
+        secondaryButtonRow.spacing = 0
+        [restoreButton].forEach(secondaryButtonRow.addArrangedSubview(_:))
+        secondaryActionsContainer.addSubview(secondaryButtonRow)
+    }
+
     private func render() {
         switch mode {
         case .loading:
-            titleLabel.stringValue = "Checking Subscription"
-            messageLabel.stringValue = "QuickPreview is verifying your App Store access before opening the player."
-            priceLabel.stringValue = ""
-            subscribeButton.title = "Start 30-Day Free Trial"
-            buttonStack.isHidden = true
+            titleLabel.stringValue = "Checking your subscription"
+            messageLabel.stringValue = "QuickPreview is confirming your App Store access before opening the player."
+            planNameLabel.stringValue = "QuickPreview Monthly"
+            priceLabel.stringValue = "Loading..."
+            planSubtitleLabel.stringValue = "Then billed monthly unless canceled"
+            trustLabel.stringValue = "Payment is handled by Apple. The subscription renews automatically unless canceled at least 24 hours before the current period ends."
+            subscribeButton.title = "Preparing purchase options..."
+            subscribeButton.isHidden = true
+            secondaryButtonRow.isHidden = true
+            secondaryActionsContainer.isHidden = true
             progressIndicator.isHidden = false
             progressIndicator.startAnimation(nil)
         case .blocked(let accessState, let productDetails):
-            titleLabel.stringValue = "Subscribe to QuickPreview"
+            titleLabel.stringValue = titleText(for: accessState)
             messageLabel.stringValue = messageText(for: accessState, productDetails: productDetails)
-            if let productDetails {
-                priceLabel.stringValue = "\(productDetails.displayName) • \(productDetails.displayPrice) / month"
-            } else {
-                priceLabel.stringValue = "Monthly subscription with a 30-day free trial"
-            }
-            subscribeButton.title = "Start 30-Day Free Trial"
-            buttonStack.isHidden = false
+            planNameLabel.stringValue = productDetails?.displayName ?? "QuickPreview Monthly"
+            priceLabel.stringValue = productPriceText(from: productDetails)
+            planSubtitleLabel.stringValue = subtitleText(for: accessState)
+            trustLabel.stringValue = legalText(for: accessState)
+            subscribeButton.title = primaryActionTitle(for: accessState)
+            subscribeButton.isHidden = false
+            secondaryButtonRow.isHidden = false
+            secondaryActionsContainer.isHidden = false
             progressIndicator.stopAnimation(nil)
             progressIndicator.isHidden = true
         }
 
-        subscribeButton.isEnabled = !isBusy && !buttonStack.isHidden
-        restoreButton.isEnabled = !isBusy && !buttonStack.isHidden
-        manageButton.isEnabled = !isBusy && !buttonStack.isHidden
-        helpButton.isEnabled = !isBusy && !buttonStack.isHidden
+        subscribeButton.isEnabled = !isBusy && !subscribeButton.isHidden
+        restoreButton.isEnabled = !isBusy && !secondaryButtonRow.isHidden
+        manageButton.isHidden = true
+        helpButton.isHidden = true
         quitButton.isEnabled = !isBusy
+
+        if isBusy {
+            subscribeButton.title = "Contacting App Store..."
+        }
+    }
+
+    private func primaryActionTitle(for accessState: SubscriptionAccessState) -> String {
+        switch accessState {
+        case .expired, .refunded, .revoked:
+            return "Subscribe"
+        case .notEntitled,
+             .unknown,
+             .verifying,
+             .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            return "Start Free Trial"
+        }
+    }
+
+    private func productPriceText(from productDetails: PaywallProductDetails?) -> String {
+        guard let productDetails else {
+            return "$1.99 / month"
+        }
+
+        return "\(productDetails.displayPrice) / month"
     }
 
     private func messageText(
@@ -168,13 +350,13 @@ final class PaywallWindowController: NSWindowController {
 
         switch accessState {
         case .expired:
-            return "Your \(productName) subscription has expired. Subscribe again to keep using playback and editing features."
+            return "Your subscription has ended. Subscribe again to continue using \(productName)."
         case .refunded:
-            return "This purchase was refunded. Subscribe again to continue using \(productName)."
+            return "This subscription was refunded. Start a new subscription to continue using QuickPreview."
         case .revoked:
-            return "This App Store subscription is no longer active for this Apple account."
+            return "This Apple account no longer has access to the subscription. Subscribe again or restore an eligible purchase."
         case .notEntitled:
-            return "Start a monthly subscription to unlock \(productName). Your subscription begins with a 30-day free trial."
+            return "Unlock QuickPreview Premium with a 1-month free trial."
         case .unknown,
              .verifying,
              .trialActive,
@@ -183,6 +365,54 @@ final class PaywallWindowController: NSWindowController {
              .inBillingRetry,
              .offlineGracePeriod:
             return "A valid App Store subscription is required to use \(productName)."
+        }
+    }
+
+    private func titleText(for accessState: SubscriptionAccessState) -> String {
+        switch accessState {
+        case .expired, .refunded, .revoked:
+            return "Subscribe to continue"
+        case .notEntitled,
+             .unknown,
+             .verifying,
+             .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            return "Start your 1-month free trial"
+        }
+    }
+
+    private func subtitleText(for accessState: SubscriptionAccessState) -> String {
+        switch accessState {
+        case .expired, .refunded, .revoked:
+            return "Billed monthly unless canceled"
+        case .notEntitled,
+             .unknown,
+             .verifying,
+             .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            return "Then billed monthly unless canceled"
+        }
+    }
+
+    private func legalText(for accessState: SubscriptionAccessState) -> String {
+        switch accessState {
+        case .expired, .refunded, .revoked:
+            return "Payment is handled by Apple. Subscription management and renewal settings are available in the App Store."
+        case .notEntitled,
+             .unknown,
+             .verifying,
+             .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            return "Payment is charged to your Apple Account at confirmation. The subscription renews automatically unless canceled at least 24 hours before the current period ends."
         }
     }
 

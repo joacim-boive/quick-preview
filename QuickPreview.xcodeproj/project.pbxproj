@@ -99,6 +99,7 @@
 		100000100000000000000204 /* Launcher-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Launcher-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000205 /* QuickPreview.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickPreview.entitlements; sourceTree = "<group>"; };
 		100000100000000000000206 /* QuickPreviewLauncher.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickPreviewLauncher.entitlements; sourceTree = "<group>"; };
+		100000100000000000000207 /* QuickPreview.storekit */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = QuickPreview.storekit; sourceTree = SOURCE_ROOT; };
 		100000300000000000000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000002 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -142,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				100000200000000000000001 /* Sources */,
+				100000100000000000000207 /* QuickPreview.storekit */,
 				100000400000000000000001 /* Frameworks */,
 				100000500000000000000001 /* Products */,
 			);
@@ -380,7 +382,7 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
@@ -399,7 +401,7 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
@@ -417,7 +419,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewLauncher.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
@@ -434,7 +436,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewLauncher.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";

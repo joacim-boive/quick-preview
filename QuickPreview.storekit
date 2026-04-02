@@ -24,11 +24,16 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "9.99",
+          "displayPrice" : "1.99",
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "5E8721AC",
-          "introductoryOffer" : null,
+          "introductoryOffer" : {
+            "internalID" : "7A2B9C1D",
+            "numberOfPeriods" : 1,
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1M"
+          },
           "localizations" : [
             {
               "description" : "Unlock QuickPreview with a monthly subscription.",
@@ -36,7 +41,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.jboive.quickpreview.monthly",
+          "productID" : "com.jboive.quickpreview.subscription.monthly",
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "QuickPreview Monthly",
           "subscriptionGroupID" : "A1C43F8B",

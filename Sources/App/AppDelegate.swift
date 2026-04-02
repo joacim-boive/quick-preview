@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var paywallWindowController: PaywallWindowController?
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
     private var accessRefreshTask: Task<Void, Never>?
+    private var suppressSubscriptionLoadingWindow = false
+    private var latestSuppressingRefreshID = 0
     private var pendingPostEntitlementAction: (() -> Void)?
     private var shortcutHintText: String?
     private var didCenterMainWindowOnFirstPresentation = false
@@ -939,8 +941,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func refreshAccessStateInBackground() {
         accessRefreshTask?.cancel()
+        latestSuppressingRefreshID += 1
+        let myRefreshID = latestSuppressingRefreshID
+        suppressSubscriptionLoadingWindow = true
         accessRefreshTask = Task { [weak self] in
-            _ = await self?.subscriptionController.refreshEntitlements()
+            guard let self else { return }
+            defer {
+                if myRefreshID == self.latestSuppressingRefreshID {
+                    self.suppressSubscriptionLoadingWindow = false
+                }
+            }
+            guard !Task.isCancelled else { return }
+            _ = await self.subscriptionController.refreshEntitlements()
+            guard !Task.isCancelled else { return }
         }
     }
 
@@ -968,7 +981,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func handleSubscriptionAccessStateChange(_ state: SubscriptionAccessState) {
         switch state {
         case .unknown, .verifying:
-            presentLoadingWindow()
+            if !suppressSubscriptionLoadingWindow {
+                presentLoadingWindow()
+            }
         case .trialActive,
              .subscriptionActive,
              .inGracePeriod,

@@ -8,7 +8,7 @@ struct SubscriptionConfiguration {
     let clockRollbackTolerance: TimeInterval
 
     static let `default` = SubscriptionConfiguration(
-        productID: "com.jboive.quickpreview.monthly",
+        productID: "com.jboive.quickpreview.subscription.monthly",
         offlineGraceWindow: 7 * 24 * 60 * 60,
         clockRollbackTolerance: 5 * 60
     )
@@ -214,11 +214,16 @@ final class SubscriptionController {
         product: Product,
         verifiedAt: Date
     ) async throws -> SubscriptionAccessState? {
+        let currentProductID = configuration.productID
+        guard product.id == currentProductID else {
+            return nil
+        }
+
         if let subscription = product.subscription {
             let statuses = try await subscription.status
             let matchingStatuses = try statuses
                 .map(Self.makeVerifiedSubscriptionStatus(_:))
-                .filter { $0.transaction.productID == configuration.productID }
+                .filter { $0.transaction.productID == currentProductID }
 
             if let resolvedState = resolveAccessState(from: matchingStatuses, verifiedAt: verifiedAt) {
                 return resolvedState
@@ -227,7 +232,7 @@ final class SubscriptionController {
 
         for await entitlement in Transaction.currentEntitlements {
             let transaction = try Self.requireVerified(entitlement)
-            guard transaction.productID == configuration.productID else {
+            guard transaction.productID == currentProductID else {
                 continue
             }
 
@@ -356,6 +361,9 @@ final class SubscriptionController {
         now: Date
     ) -> SubscriptionAccessState? {
         guard let snapshot else {
+            return nil
+        }
+        guard snapshot.matches(productID: configuration.productID) else {
             return nil
         }
 
