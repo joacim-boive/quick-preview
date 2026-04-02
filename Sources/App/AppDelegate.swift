@@ -54,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        _ = app
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         accessRefreshTask?.cancel()
         bookmarksWindowController?.prepareForApplicationTermination()
@@ -809,7 +814,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.refreshFinderSelectionMonitoring()
+            Task { @MainActor [weak self] in
+                self?.refreshFinderSelectionMonitoring()
+            }
         }
     }
 

@@ -9,6 +9,10 @@ struct HotkeyRegistration: Equatable {
 }
 
 enum BackgroundShortcutConfiguration {
+    private struct PersistedShortcutSelection: Codable {
+        let shortcutID: String
+    }
+
     static let sharedDefaultsSuiteName = "group.com.jboive.quickpreview.shared"
     static let helperBundleIdentifier = "com.jboive.quickpreview.launcher"
     static let helperAppName = "QuickPreviewLauncher"
@@ -54,15 +58,16 @@ enum BackgroundShortcutConfiguration {
         )
     ]
 
+    private static let sharedShortcutFileName = "BackgroundShortcutSelection.json"
+
     static func sharedDefaults() -> UserDefaults? {
-        UserDefaults(suiteName: sharedDefaultsSuiteName)
+        nil
     }
 
     static func selectedShortcut(defaults: UserDefaults? = sharedDefaults()) -> HotkeyRegistration? {
-        guard
-            let defaults,
-            let identifier = defaults.string(forKey: selectedShortcutDefaultsKey)
-        else {
+        _ = defaults
+
+        guard let identifier = loadPersistedShortcutIdentifier() else {
             return nil
         }
 
@@ -73,11 +78,12 @@ enum BackgroundShortcutConfiguration {
         _ shortcut: HotkeyRegistration?,
         defaults: UserDefaults? = sharedDefaults()
     ) {
-        guard let defaults else { return }
+        _ = defaults
+
         if let shortcut {
-            defaults.set(shortcut.id, forKey: selectedShortcutDefaultsKey)
+            persistShortcutIdentifier(shortcut.id)
         } else {
-            defaults.removeObject(forKey: selectedShortcutDefaultsKey)
+            clearPersistedShortcutIdentifier()
         }
     }
 
@@ -87,5 +93,48 @@ enum BackgroundShortcutConfiguration {
         }
 
         return "Shortcut: \(shortcut.displayName)"
+    }
+
+    private static func loadPersistedShortcutIdentifier() -> String? {
+        guard
+            let storageURL = sharedShortcutStorageURL(),
+            let data = try? Data(contentsOf: storageURL),
+            let persistedSelection = try? JSONDecoder().decode(PersistedShortcutSelection.self, from: data)
+        else {
+            return nil
+        }
+
+        return persistedSelection.shortcutID
+    }
+
+    private static func persistShortcutIdentifier(_ identifier: String) {
+        guard let storageURL = sharedShortcutStorageURL() else { return }
+
+        let persistedSelection = PersistedShortcutSelection(shortcutID: identifier)
+        guard let data = try? JSONEncoder().encode(persistedSelection) else { return }
+
+        try? FileManager.default.createDirectory(
+            at: storageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: storageURL, options: .atomic)
+    }
+
+    private static func clearPersistedShortcutIdentifier() {
+        guard let storageURL = sharedShortcutStorageURL() else { return }
+        try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    private static func sharedShortcutStorageURL() -> URL? {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: sharedDefaultsSuiteName
+        ) else {
+            return nil
+        }
+
+        return containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent(sharedShortcutFileName, isDirectory: false)
     }
 }
