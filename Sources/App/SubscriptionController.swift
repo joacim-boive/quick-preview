@@ -8,7 +8,7 @@ struct SubscriptionConfiguration {
     let clockRollbackTolerance: TimeInterval
 
     static let `default` = SubscriptionConfiguration(
-        productID: "com.jboive.quickpreview.monthly",
+        productID: "com.jboive.quickpreview.subscription.monthly",
         offlineGraceWindow: 7 * 24 * 60 * 60,
         clockRollbackTolerance: 5 * 60
     )
