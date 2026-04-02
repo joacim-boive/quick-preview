@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var finderSelectionMonitorTimer: DispatchSourceTimer?
     private var accessRefreshTask: Task<Void, Never>?
     private var suppressSubscriptionLoadingWindow = false
+    private var latestSuppressingRefreshID = 0
     private var pendingPostEntitlementAction: (() -> Void)?
     private var shortcutHintText: String?
     private var didCenterMainWindowOnFirstPresentation = false
@@ -940,13 +941,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func refreshAccessStateInBackground() {
         accessRefreshTask?.cancel()
+        latestSuppressingRefreshID += 1
+        let myRefreshID = latestSuppressingRefreshID
         suppressSubscriptionLoadingWindow = true
         accessRefreshTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                self.suppressSubscriptionLoadingWindow = false
+                if myRefreshID == self.latestSuppressingRefreshID {
+                    self.suppressSubscriptionLoadingWindow = false
+                }
             }
+            guard !Task.isCancelled else { return }
             _ = await self.subscriptionController.refreshEntitlements()
+            guard !Task.isCancelled else { return }
         }
     }
 
