@@ -38,7 +38,7 @@ macOS standalone video player focused on fast preview and loop workflows:
 
 In the standalone app, once a video is loaded, selecting a different video in Finder automatically switches playback to that selected file.
 
-The global shortcut is still available, but no longer required to switch to another Finder-selected video while the player is active.
+The global shortcut is still available, but no longer required to switch to another Finder-selected video while the player is active. It is now optional and should be chosen explicitly from the app instead of assuming a fixed default.
 
 ## Build Notes
 

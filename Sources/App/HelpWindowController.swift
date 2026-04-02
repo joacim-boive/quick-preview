@@ -52,7 +52,7 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeBulletList([
             "Open a video from File > Open..., drag and drop, or use Finder selection.",
             "Use the Autoplay switch in the main window when you want newly opened clips and bookmarks to stay paused.",
-            "Enable QuickPreview > Background Shortcut if you want the global shortcut to work after closing the app.",
+            "Use QuickPreview > Set Background Shortcut... if you want an optional global shortcut after closing the app.",
             "Click the video or press Space to play/pause, even while the bookmark manager is focused.",
             "When you are editing the bookmark search or tags fields, Space stays in that text field instead.",
             "Use Left/Right arrows for fine seek and Shift + arrows for coarse seek.",
@@ -84,7 +84,7 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeSectionTitle("Keyboard Shortcuts"))
         stack.addArrangedSubview(makeShortcutsTable())
         stack.addArrangedSubview(makeBodyLabel(
-            "The background helper tries Ctrl + Space first. If macOS reserves it for input switching, QuickPreview falls back to Option + Space or Cmd + Shift + Space."
+            "The background shortcut is optional and configurable. Pick one from QuickPreview > Set Background Shortcut... if you want QuickPreview to reopen from the background."
         ))
 
         if let infographicView = makeInfographicView() {
@@ -156,7 +156,7 @@ final class HelpWindowController: NSWindowController {
             ("Cmd + O", "Open video file"),
             ("Cmd + Shift + O", "Open current Finder selection"),
             ("Cmd + Shift + P", "Toggle autoplay for newly opened clips and bookmark jumps"),
-            ("Ctrl + Space", "Reopen QuickPreview from anywhere when Background Shortcut is enabled"),
+            ("Configured Background Shortcut", "Reopen QuickPreview from anywhere when the optional background shortcut is enabled"),
             ("Space", "Play / Pause, including from the bookmark manager unless a text field is being edited"),
             ("L", "Toggle loop on current clip"),
             ("R", "Rotate clockwise (0° / 90° / 180° / 270°)"),

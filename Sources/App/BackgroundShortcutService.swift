@@ -53,6 +53,10 @@ final class BackgroundShortcutService {
 
     func launchHelperIfNeeded() throws {
         guard status == .enabled else { return }
+        guard BackgroundShortcutConfiguration.selectedShortcut() != nil else {
+            terminateRunningHelper()
+            return
+        }
         guard NSRunningApplication.runningApplications(
             withBundleIdentifier: BackgroundShortcutConfiguration.helperBundleIdentifier
         ).isEmpty else {
@@ -67,6 +71,12 @@ final class BackgroundShortcutService {
         configuration.hides = true
 
         NSWorkspace.shared.openApplication(at: helperURL, configuration: configuration) { _, _ in }
+    }
+
+    func reloadHelperIfNeeded() throws {
+        guard status == .enabled else { return }
+        terminateRunningHelper()
+        try launchHelperIfNeeded()
     }
 
     private func terminateRunningHelper() {
