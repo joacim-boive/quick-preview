@@ -6,8 +6,11 @@ final class LauncherAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        _ = hotkeyManager.registerSpaceHotkey { [weak self] in
+        let didRegister = hotkeyManager.registerSelectedHotkey { [weak self] in
             self?.launchQuickPreview()
+        }
+        if !didRegister {
+            NSApp.terminate(nil)
         }
     }
 

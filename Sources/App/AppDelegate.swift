@@ -1,7 +1,7 @@
 import Cocoa
+import ApplicationServices
 import ServiceManagement
 import StoreKit
-import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
@@ -289,15 +289,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 : "Enable Paranoid Mode..."
             return isEntitled && protectedBookmarksSessionController.isUnlocked
         case backgroundShortcutMenuItemTag:
-            switch backgroundShortcutService.status {
-            case .enabled:
-                menuItem.title = "Disable Background Shortcut"
-            case .requiresApproval:
-                menuItem.title = "Finish Enabling Background Shortcut..."
-            case .notRegistered, .notFound:
-                menuItem.title = "Enable Background Shortcut..."
-            @unknown default:
-                menuItem.title = "Background Shortcut..."
+            if let selectedShortcut = BackgroundShortcutConfiguration.selectedShortcut() {
+                switch backgroundShortcutService.status {
+                case .enabled:
+                    menuItem.title = "Background Shortcut (\(selectedShortcut.displayName))..."
+                case .requiresApproval:
+                    menuItem.title = "Finish Enabling Background Shortcut..."
+                case .notRegistered, .notFound:
+                    menuItem.title = "Set Background Shortcut..."
+                @unknown default:
+                    menuItem.title = "Background Shortcut..."
+                }
+            } else {
+                menuItem.title = "Set Background Shortcut..."
             }
             return true
         default:
@@ -405,20 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc
     private func handleBackgroundShortcutMenuItem(_ sender: Any?) {
         _ = sender
-
-        switch backgroundShortcutService.status {
-        case .enabled:
-            disableBackgroundShortcut()
-        case .requiresApproval:
-            presentBackgroundShortcutApprovalPrompt(isStartupPrompt: false)
-        case .notRegistered, .notFound:
-            presentBackgroundShortcutEnablePrompt(isStartupPrompt: false)
-        @unknown default:
-            showInfoAlert(
-                title: "Background Shortcut Unavailable",
-                message: "QuickPreview could not determine the current background helper state."
-            )
-        }
+        presentBackgroundShortcutConfiguration()
     }
 
     private func showBookmarksWindow(selecting bookmark: Bookmark?, highlightSelection: Bool = false) {
@@ -599,22 +590,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             )
         }
 
+        guard BackgroundShortcutConfiguration.selectedShortcut() != nil else {
+            return
+        }
+
         guard !backgroundShortcutService.hasShownStartupPrompt else {
             return
         }
 
         switch backgroundShortcutService.status {
-        case .enabled:
+        case .enabled, .notRegistered, .notFound:
             return
-        case .requiresApproval, .notRegistered, .notFound:
+        case .requiresApproval:
             backgroundShortcutService.markStartupPromptShown()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 guard let self else { return }
                 switch self.backgroundShortcutService.status {
                 case .requiresApproval:
                     self.presentBackgroundShortcutApprovalPrompt(isStartupPrompt: true)
-                case .notRegistered, .notFound:
-                    self.presentBackgroundShortcutEnablePrompt(isStartupPrompt: true)
                 default:
                     break
                 }
@@ -635,20 +628,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func presentBackgroundShortcutEnablePrompt(isStartupPrompt: Bool) {
+    private func presentBackgroundShortcutConfiguration() {
+        let currentShortcut = BackgroundShortcutConfiguration.selectedShortcut()
         let alert = NSAlert()
-        alert.messageText = "Enable Background Shortcut"
+        alert.messageText = "Background Shortcut"
         alert.informativeText = """
-        Allow QuickPreview to keep a tiny helper running in the background so \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space") can relaunch the player even when QuickPreview is closed.
+        QuickPreview will not reserve any global shortcut until you choose one here.
 
-        If macOS reserves Ctrl+Space, QuickPreview automatically falls back to \(BackgroundShortcutConfiguration.fallbackDescription).
+        Pick a shortcut that does not conflict with your editor or macOS, and QuickPreview will use it to reopen from the background after the main app is closed.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Enable")
-        alert.addButton(withTitle: isStartupPrompt ? "Not Now" : "Cancel")
+        alert.addButton(withTitle: "Save")
+        if currentShortcut != nil || backgroundShortcutService.status == .enabled || backgroundShortcutService.status == .requiresApproval {
+            alert.addButton(withTitle: "Turn Off")
+        }
+        alert.addButton(withTitle: "Cancel")
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            enableBackgroundShortcut()
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 52))
+        let label = NSTextField(labelWithString: "Shortcut")
+        label.frame = NSRect(x: 0, y: 30, width: 320, height: 16)
+
+        let popupButton = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
+        popupButton.addItem(withTitle: "Choose a shortcut...")
+        BackgroundShortcutConfiguration.availableShortcuts.forEach { shortcut in
+            popupButton.addItem(withTitle: shortcut.displayName)
+            popupButton.lastItem?.representedObject = shortcut.id as NSString
+        }
+        if let currentShortcut,
+           let index = BackgroundShortcutConfiguration.availableShortcuts.firstIndex(of: currentShortcut) {
+            popupButton.selectItem(at: index + 1)
+        } else {
+            popupButton.selectItem(at: 0)
+        }
+
+        accessoryView.addSubview(label)
+        accessoryView.addSubview(popupButton)
+        alert.accessoryView = accessoryView
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            guard
+                let selectedItem = popupButton.selectedItem,
+                let identifier = selectedItem.representedObject as? NSString,
+                let selectedShortcut = BackgroundShortcutConfiguration.availableShortcuts.first(where: { $0.id == String(identifier) })
+            else {
+                showInfoAlert(
+                    title: "Choose a Shortcut",
+                    message: "Pick a shortcut before enabling the background helper."
+                )
+                return
+            }
+            setBackgroundShortcut(selectedShortcut)
+            return
+        }
+
+        if response == .alertSecondButtonReturn,
+           currentShortcut != nil || backgroundShortcutService.status == .enabled || backgroundShortcutService.status == .requiresApproval {
+            disableBackgroundShortcut(clearSelection: true)
         }
     }
 
@@ -669,18 +705,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func enableBackgroundShortcut() {
+    private func setBackgroundShortcut(_ shortcut: HotkeyRegistration) {
+        guard GlobalHotkeyManager.canRegister(shortcut) else {
+            showInfoAlert(
+                title: "Shortcut Unavailable",
+                message: """
+                \(shortcut.displayName) is already reserved by macOS or another app.
+
+                Choose a different shortcut for QuickPreview.
+                """
+            )
+            return
+        }
+
+        BackgroundShortcutConfiguration.storeSelectedShortcut(shortcut)
+        updateShortcutHint()
+        backgroundShortcutService.resetStartupPrompt()
+
         do {
-            let status = try backgroundShortcutService.enable()
+            let status: SMAppService.Status
+            switch backgroundShortcutService.status {
+            case .enabled:
+                status = .enabled
+            case .requiresApproval:
+                status = .requiresApproval
+            case .notRegistered, .notFound:
+                status = try backgroundShortcutService.enable()
+            @unknown default:
+                status = backgroundShortcutService.status
+            }
+
             switch status {
             case .enabled:
-                try backgroundShortcutService.launchHelperIfNeeded()
+                try backgroundShortcutService.reloadHelperIfNeeded()
                 showInfoAlert(
-                    title: "Background Shortcut Enabled",
+                    title: "Background Shortcut Set",
                     message: """
-                    QuickPreview can now reopen from the background using \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space").
-
-                    If macOS keeps that shortcut reserved, QuickPreview falls back automatically.
+                    QuickPreview can now reopen from the background using \(shortcut.displayName).
                     """
                 )
             case .requiresApproval:
@@ -688,7 +749,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case .notRegistered, .notFound:
                 showInfoAlert(
                     title: "Background Shortcut Pending",
-                    message: "QuickPreview asked macOS to register the background helper, but the helper is not active yet."
+                    message: "QuickPreview saved your shortcut, but the background helper is not active yet."
                 )
             @unknown default:
                 showInfoAlert(
@@ -704,12 +765,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func disableBackgroundShortcut() {
+    private func disableBackgroundShortcut(clearSelection: Bool) {
+        if clearSelection {
+            BackgroundShortcutConfiguration.storeSelectedShortcut(nil)
+            updateShortcutHint()
+        }
+
         do {
-            try backgroundShortcutService.disable()
+            switch backgroundShortcutService.status {
+            case .enabled, .requiresApproval:
+                try backgroundShortcutService.disable()
+            case .notRegistered, .notFound:
+                backgroundShortcutService.resetStartupPrompt()
+            @unknown default:
+                break
+            }
             showInfoAlert(
                 title: "Background Shortcut Disabled",
-                message: "QuickPreview will no longer keep its helper running in the background after you close the app."
+                message: "QuickPreview will no longer reserve a background shortcut after you close the app."
             )
         } catch {
             showInfoAlert(
@@ -717,6 +790,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 message: error.localizedDescription
             )
         }
+    }
+
+    private func updateShortcutHint() {
+        shortcutHintText = BackgroundShortcutConfiguration.windowTitleHint
+        windowController?.setShortcutHint(shortcutHintText ?? "")
     }
 
     private func startFinderSelectionMonitor() {
@@ -741,11 +819,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard
                 let self,
                 let controller = self.windowController,
-                controller.hasLoadedVideo()
+                controller.hasLoadedVideo(),
+                let loadedVideoURL = controller.loadedVideoURL()
             else {
                 return nil
             }
-            return controller.loadedVideoURL()
+            return loadedVideoURL
         }
 
         guard let loadedVideoURL else {
@@ -756,34 +835,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let selectionChanged = selectedVideoURL != lastObservedFinderSelectedVideoURL
         lastObservedFinderSelectedVideoURL = selectedVideoURL
 
-        guard let selectedVideoURL else {
+        let isEntitled = subscriptionController.accessState.isEntitled
+        if !isEntitled {
+            return
+        } else if selectedVideoURL == nil {
             ignoredFinderSelectedVideoURL = nil
+        } else if ignoredFinderSelectedVideoURL == selectedVideoURL {
             return
-        }
-
-        if ignoredFinderSelectedVideoURL == selectedVideoURL {
-            return
-        }
-        ignoredFinderSelectedVideoURL = nil
-
-        guard selectionChanged else {
-            return
-        }
-        guard selectedVideoURL != loadedVideoURL else {
-            return
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            guard
-                let self,
-                self.subscriptionController.accessState.isEntitled,
-                let controller = self.windowController,
-                controller.hasLoadedVideo(),
-                selectedVideoURL != controller.loadedVideoURL()
-            else {
-                return
+        } else if !selectionChanged {
+            ignoredFinderSelectedVideoURL = nil
+        } else if selectedVideoURL == loadedVideoURL {
+            ignoredFinderSelectedVideoURL = nil
+        } else {
+            ignoredFinderSelectedVideoURL = nil
+            DispatchQueue.main.async { [weak self] in
+                guard
+                    let self,
+                    self.subscriptionController.accessState.isEntitled,
+                    let controller = self.windowController,
+                    controller.hasLoadedVideo(),
+                    selectedVideoURL != controller.loadedVideoURL(),
+                    let selectedVideoURL
+                else {
+                    return
+                }
+                controller.openVideo(url: selectedVideoURL)
             }
-            controller.openVideo(url: selectedVideoURL)
         }
     }
 
@@ -1257,13 +1334,14 @@ private enum FinderSelectionProbe {
             "end tell"
         ]
         let script = lines.joined(separator: "\n")
-        guard let output = runAppleScriptUsingProcess(script), !output.isEmpty else {
+        let result = runAppleScriptUsingProcess(script)
+        guard let output = result.output, !output.isEmpty else {
             return nil
         }
         return URL(fileURLWithPath: output)
     }
 
-    private static func runAppleScriptUsingProcess(_ source: String) -> String? {
+    private static func runAppleScriptUsingProcess(_ source: String) -> (output: String?, errorOutput: String?, terminationStatus: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
 
@@ -1276,22 +1354,32 @@ private enum FinderSelectionProbe {
         process.arguments = arguments
 
         let outputPipe = Pipe()
+        let errorPipe = Pipe()
         process.standardOutput = outputPipe
+        process.standardError = errorPipe
 
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
-            return nil
-        }
-
-        guard process.terminationStatus == 0 else {
-            return nil
+            return (
+                output: nil,
+                errorOutput: error.localizedDescription,
+                terminationStatus: -1
+            )
         }
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: outputData, encoding: .utf8)?
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: outputData, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let errorOutput = String(data: errorData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (
+            output: output?.isEmpty == false ? output : nil,
+            errorOutput: errorOutput?.isEmpty == false ? errorOutput : nil,
+            terminationStatus: process.terminationStatus
+        )
     }
 
     private static func isVideoURL(_ url: URL) -> Bool {
