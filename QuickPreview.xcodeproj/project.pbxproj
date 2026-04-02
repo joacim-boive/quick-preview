@@ -382,7 +382,7 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
@@ -401,7 +401,7 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
@@ -419,7 +419,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewLauncher.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
@@ -436,7 +436,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewLauncher.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
