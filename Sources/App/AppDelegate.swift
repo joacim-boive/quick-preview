@@ -1,5 +1,4 @@
 import Cocoa
-import ApplicationServices
 import ServiceManagement
 import StoreKit
 
@@ -7,6 +6,7 @@ import StoreKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let backgroundShortcutService = BackgroundShortcutService()
     private let bookmarkStore = BookmarkStore()
+    private let finderSelectionService = FinderSelectionService()
     private let thumbnailService = VideoThumbnailService()
     private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
     private let subscriptionController = SubscriptionController()
@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var helpWindowController: HelpWindowController?
     private var bookmarksWindowController: BookmarksWindowController?
     private var paywallWindowController: PaywallWindowController?
-    private var finderSelectionMonitorTimer: DispatchSourceTimer?
     private var accessRefreshTask: Task<Void, Never>?
     private var suppressSubscriptionLoadingWindow = false
     private var latestSuppressingRefreshID = 0
@@ -22,13 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var shortcutHintText: String?
     private var didCenterMainWindowOnFirstPresentation = false
     private var appDidBecomeActiveObserver: NSObjectProtocol?
+    private var workspaceActivationObserver: NSObjectProtocol?
     private var protectedBookmarksSessionObserver: NSObjectProtocol?
-    private let finderSelectionMonitorQueue = DispatchQueue(
-        label: "quickpreview.finder-selection-monitor",
-        qos: .utility
-    )
-    private var isSelectionCheckInProgress = false
-    private var lastObservedFinderSelectedVideoURL: URL?
     private var ignoredFinderSelectedVideoURL: URL?
     private let loopMenuItemTag = 4101
     private let autoplayMenuItemTag = 4102
@@ -66,10 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         windowController?.closeCurrentVideoIfNeeded()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
-        finderSelectionMonitorTimer?.cancel()
-        finderSelectionMonitorTimer = nil
+        finderSelectionService.stop()
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+        }
+        if let workspaceActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
         }
         NotificationCenter.default.removeObserver(
             self,
@@ -343,7 +339,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let controller = MainPlayerWindowController(
             bookmarkStore: bookmarkStore,
-            thumbnailService: thumbnailService
+            thumbnailService: thumbnailService,
+            finderSelectionService: finderSelectionService
         )
         if let shortcutHintText {
             controller.setShortcutHint(shortcutHintText)
@@ -353,11 +350,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         controller.onCurrentVideoURLChange = { [weak self] videoURL in
             self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
+            self?.refreshFinderSelectionMonitoring()
         }
         controller.onBookmarkNavigationRequested = { [weak self] delta in
             self?.bookmarksWindowController?.navigateSelection(delta: delta)
         }
         windowController = controller
+        refreshFinderSelectionMonitoring()
         return controller
     }
 
@@ -798,75 +797,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func startFinderSelectionMonitor() {
-        finderSelectionMonitorTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: finderSelectionMonitorQueue)
-        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500))
-        timer.setEventHandler { [weak self] in
-            self?.followFinderSelectionIfNeeded()
+        finderSelectionService.onSelectionSnapshot = { [weak self] snapshot in
+            self?.handleFinderSelectionSnapshot(snapshot)
         }
-        finderSelectionMonitorTimer = timer
-        timer.resume()
+        finderSelectionService.start()
+        refreshFinderSelectionMonitoring()
+
+        guard workspaceActivationObserver == nil else { return }
+        workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshFinderSelectionMonitoring()
+        }
     }
 
-    private func followFinderSelectionIfNeeded() {
-        if isSelectionCheckInProgress {
+    private func handleFinderSelectionSnapshot(_ snapshot: FinderSelectionSnapshot) {
+        guard
+            subscriptionController.accessState.isEntitled,
+            let controller = windowController,
+            controller.hasLoadedVideo(),
+            let loadedVideoURL = controller.loadedVideoURL()
+        else {
             return
         }
-        isSelectionCheckInProgress = true
-        defer { isSelectionCheckInProgress = false }
 
-        let loadedVideoURL: URL? = DispatchQueue.main.sync { [weak self] in
-            guard
-                let self,
-                let controller = self.windowController,
-                controller.hasLoadedVideo(),
-                let loadedVideoURL = controller.loadedVideoURL()
-            else {
-                return nil
+        switch snapshot.result {
+        case let .video(selectedVideoURL):
+            if ignoredFinderSelectedVideoURL == selectedVideoURL {
+                return
             }
-            return loadedVideoURL
-        }
 
-        guard let loadedVideoURL else {
-            return
-        }
-
-        let selectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL()
-        let selectionChanged = selectedVideoURL != lastObservedFinderSelectedVideoURL
-        lastObservedFinderSelectedVideoURL = selectedVideoURL
-
-        let isEntitled = subscriptionController.accessState.isEntitled
-        if !isEntitled {
-            return
-        } else if selectedVideoURL == nil {
-            ignoredFinderSelectedVideoURL = nil
-        } else if ignoredFinderSelectedVideoURL == selectedVideoURL {
-            return
-        } else if !selectionChanged {
-            ignoredFinderSelectedVideoURL = nil
-        } else if selectedVideoURL == loadedVideoURL {
-            ignoredFinderSelectedVideoURL = nil
-        } else {
-            ignoredFinderSelectedVideoURL = nil
-            DispatchQueue.main.async { [weak self] in
-                guard
-                    let self,
-                    self.subscriptionController.accessState.isEntitled,
-                    let controller = self.windowController,
-                    controller.hasLoadedVideo(),
-                    selectedVideoURL != controller.loadedVideoURL(),
-                    let selectedVideoURL
-                else {
-                    return
-                }
-                controller.openVideo(url: selectedVideoURL)
+            guard selectedVideoURL != loadedVideoURL else {
+                ignoredFinderSelectedVideoURL = nil
+                return
             }
+
+            ignoredFinderSelectedVideoURL = nil
+            controller.openVideo(url: selectedVideoURL)
+        case .noSelection, .nonVideo:
+            ignoredFinderSelectedVideoURL = nil
+        case .automationDenied, .finderUnavailable, .scriptError:
+            break
         }
     }
 
     private func ignoreCurrentFinderSelection() {
-        ignoredFinderSelectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL()
-        lastObservedFinderSelectedVideoURL = ignoredFinderSelectedVideoURL
+        ignoredFinderSelectedVideoURL = finderSelectionService.readCurrentSelection(activateFinder: false).selectedVideoURL
+    }
+
+    private func refreshFinderSelectionMonitoring() {
+        let state = FinderSelectionMonitoringState(
+            isFollowEnabled: true,
+            isEntitled: subscriptionController.accessState.isEntitled,
+            hasLoadedVideo: windowController?.hasLoadedVideo() == true,
+            isAppActive: NSApp.isActive,
+            isFinderFrontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder"
+        )
+        finderSelectionService.updateMonitoringState(state)
     }
 
     private func showStartupAlert(title: String, message: String) {
@@ -991,6 +980,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refreshAccessStateInBackground()
+                self?.refreshFinderSelectionMonitoring()
             }
         }
     }
@@ -1078,6 +1068,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             hideEntitledWindows()
             presentBlockedPaywall(for: state)
         }
+
+        refreshFinderSelectionMonitoring()
     }
 
     private func presentLoadingWindow() {
@@ -1287,113 +1279,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .unknown, .verifying:
             presentLoadingWindow()
             refreshAccessStateInBackground()
-        }
-    }
-}
-
-private enum FinderSelectionProbe {
-    static func selectedFinderVideoURL() -> URL? {
-        guard let selectedURL = selectedFinderFileURL() else {
-            return nil
-        }
-        guard isVideoURL(selectedURL) else {
-            return nil
-        }
-        return selectedURL.standardizedFileURL
-    }
-
-    private static func selectedFinderFileURL() -> URL? {
-        let lines: [String] = [
-            "tell application \"Finder\"",
-            "    set selectedItems to {}",
-            "",
-            "    try",
-            "        set selectedItems to selection",
-            "    end try",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        try",
-            "            if (count of Finder windows) > 0 then",
-            "                set selectedItems to (selection of front Finder window)",
-            "            end if",
-            "        end try",
-            "    end if",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        try",
-            "            set selectedItems to (every item of desktop whose selected is true)",
-            "        end try",
-            "    end if",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        return \"\"",
-            "    end if",
-            "",
-            "    set firstItem to item 1 of selectedItems",
-            "    return POSIX path of (firstItem as alias)",
-            "end tell"
-        ]
-        let script = lines.joined(separator: "\n")
-        let result = runAppleScriptUsingProcess(script)
-        guard let output = result.output, !output.isEmpty else {
-            return nil
-        }
-        return URL(fileURLWithPath: output)
-    }
-
-    private static func runAppleScriptUsingProcess(_ source: String) -> (output: String?, errorOutput: String?, terminationStatus: Int32) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-
-        var arguments: [String] = []
-        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
-        for line in lines {
-            arguments.append("-e")
-            arguments.append(String(line))
-        }
-        process.arguments = arguments
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return (
-                output: nil,
-                errorOutput: error.localizedDescription,
-                terminationStatus: -1
-            )
-        }
-
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: outputData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let errorOutput = String(data: errorData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (
-            output: output?.isEmpty == false ? output : nil,
-            errorOutput: errorOutput?.isEmpty == false ? errorOutput : nil,
-            terminationStatus: process.terminationStatus
-        )
-    }
-
-    private static func isVideoURL(_ url: URL) -> Bool {
-        do {
-            let values = try url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
-            if values.isDirectory == true {
-                return false
-            }
-            if let contentType = values.contentType {
-                return contentType.conforms(to: .movie)
-            }
-            return false
-        } catch {
-            return false
         }
     }
 }

@@ -17,6 +17,7 @@ struct BookmarkTimelineMarker: Equatable, Comparable {
 final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
     private let bookmarkStore: BookmarkStore
+    private let finderSelectionService: FinderSelectionService
     private let bookmarkTimelineHoverPreview: BookmarkTimelineMarkerHoverPreviewController
     private let playerView = PlayerSurfaceView(frame: .zero)
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
@@ -129,14 +130,13 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    enum FinderSelectionState {
-        case none
-        case nonVideo(URL)
-        case video(URL)
-    }
-
-    init(bookmarkStore: BookmarkStore, thumbnailService: VideoThumbnailService) {
+    init(
+        bookmarkStore: BookmarkStore,
+        thumbnailService: VideoThumbnailService,
+        finderSelectionService: FinderSelectionService
+    ) {
         self.bookmarkStore = bookmarkStore
+        self.finderSelectionService = finderSelectionService
         self.bookmarkTimelineHoverPreview = BookmarkTimelineMarkerHoverPreviewController(
             thumbnailService: thumbnailService
         )
@@ -217,53 +217,41 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     @discardableResult
     func openFinderSelectionIfVideo(showErrors: Bool = false) -> Bool {
-        do {
-            let fileURL = try selectedFinderFileURL(activateFinder: true)
-            guard isVideoURL(fileURL) else {
-                if showErrors {
-                    showInfoAlert(
-                        title: "Selected Item Is Not a Video",
-                        message: "Select a video file in Finder (MP4, MOV, M4V, etc.) and try again."
-                    )
-                }
-                return false
-            }
+        let snapshot = finderSelectionService.readCurrentSelection(activateFinder: true)
+
+        switch snapshot.result {
+        case let .video(fileURL):
             openVideo(url: fileURL)
             return true
-        } catch let error as FinderSelectionError {
-            if showErrors {
-                showInfoAlert(title: error.title, message: error.message)
-            }
-            return false
-        } catch {
+        case .nonVideo:
             if showErrors {
                 showInfoAlert(
-                    title: "Could Not Read Finder Selection",
-                    message: "Grant Finder Automation permission to QuickPreview in System Settings > Privacy & Security > Automation."
+                    title: "Selected Item Is Not a Video",
+                    message: "Select a video file in Finder (MP4, MOV, M4V, etc.) and try again."
                 )
             }
             return false
+        case .noSelection:
+            if showErrors {
+                showFinderSelectionError(.noSelection)
+            }
+            return false
+        case .automationDenied:
+            if showErrors {
+                showFinderSelectionError(.automationDenied)
+            }
+            return false
+        case .finderUnavailable:
+            if showErrors {
+                showFinderSelectionError(.finderUnavailable)
+            }
+            return false
+        case let .scriptError(code):
+            if showErrors {
+                showFinderSelectionError(.scriptError(code))
+            }
+            return false
         }
-    }
-
-    func selectedFinderVideoURL(activateFinder: Bool) -> URL? {
-        guard let fileURL = try? selectedFinderFileURL(activateFinder: activateFinder) else {
-            return nil
-        }
-        guard isVideoURL(fileURL) else {
-            return nil
-        }
-        return fileURL.standardizedFileURL
-    }
-
-    func finderSelectionState(activateFinder: Bool) -> FinderSelectionState {
-        guard let fileURL = try? selectedFinderFileURL(activateFinder: activateFinder) else {
-            return .none
-        }
-        if isVideoURL(fileURL) {
-            return .video(fileURL.standardizedFileURL)
-        }
-        return .nonVideo(fileURL.standardizedFileURL)
     }
 
     func loadedVideoURL() -> URL? {
@@ -368,122 +356,6 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
         let nextIndex = (currentIndex + 1) % allowedRotationDegrees.count
         setRotationDegrees(allowedRotationDegrees[nextIndex])
-    }
-
-    private func selectedFinderFileURL(activateFinder: Bool) throws -> URL {
-        var lines: [String] = [
-            "tell application \"Finder\""
-        ]
-        if activateFinder {
-            lines.append("    activate")
-            lines.append("    delay 0.2")
-        }
-        lines.append(contentsOf: [
-            "    set selectedItems to {}",
-            "",
-            "    try",
-            "        set selectedItems to selection",
-            "    end try",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        try",
-            "            if (count of Finder windows) > 0 then",
-                "                set selectedItems to (selection of front Finder window)",
-            "            end if",
-            "        end try",
-            "    end if",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        try",
-                "            set selectedItems to (every item of desktop whose selected is true)",
-            "        end try",
-            "    end if",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        return \"\"",
-            "    end if",
-            "",
-            "    set firstItem to item 1 of selectedItems",
-            "    return POSIX path of (firstItem as alias)",
-            "end tell"
-        ])
-        let script = lines.joined(separator: "\n")
-
-        let result = runAppleScript(script)
-        if let code = result.errorCode, code == -1743 || code == -1719 {
-            throw FinderSelectionError.automationDenied
-        }
-        if let value = result.value, !value.isEmpty {
-            return URL(fileURLWithPath: value)
-        }
-        if let code = result.errorCode {
-            throw FinderSelectionError.noSelectionWithDetails("finder.selection: error \(code)")
-        }
-        throw FinderSelectionError.noSelectionWithDetails("finder.selection: empty")
-    }
-
-    private func runAppleScript(_ source: String) -> (value: String?, errorCode: Int?) {
-        let processResult = runAppleScriptUsingProcess(source)
-        if processResult.errorCode == nil {
-            return processResult
-        }
-
-        guard let script = NSAppleScript(source: source) else {
-            return (nil, -1)
-        }
-        var errorInfo: NSDictionary?
-        let result = script.executeAndReturnError(&errorInfo)
-        let errorCode = errorInfo?[NSAppleScript.errorNumber] as? Int
-        return (result.stringValue, errorCode)
-    }
-
-    private func runAppleScriptUsingProcess(_ source: String) -> (value: String?, errorCode: Int?) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-
-        var arguments: [String] = []
-        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
-        for line in lines {
-            arguments.append("-e")
-            arguments.append(String(line))
-        }
-        process.arguments = arguments
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return (nil, -1)
-        }
-
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: outputData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let errorText = String(data: errorData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        if process.terminationStatus == 0 {
-            return (output?.isEmpty == false ? output : nil, nil)
-        }
-
-        let parsedCode = parseAppleScriptErrorCode(from: errorText) ?? Int(process.terminationStatus)
-        return (nil, parsedCode)
-    }
-
-    private func parseAppleScriptErrorCode(from errorText: String) -> Int? {
-        guard let match = errorText.range(of: #"\(-?\d+\)"#, options: .regularExpression) else {
-            return nil
-        }
-        let raw = errorText[match]
-            .replacingOccurrences(of: "(", with: "")
-            .replacingOccurrences(of: ")", with: "")
-        return Int(raw)
     }
 
     func presentOpenPanelIfNeeded() {
@@ -1164,6 +1036,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
         inlineTimelineView.bookmarks = currentClipBookmarks
         inlineTimelineView.selectedBookmarkID = selectedBookmarkID
+    }
+
+    private func showFinderSelectionError(_ error: FinderSelectionUserFacingError) {
+        showInfoAlert(title: error.title, message: error.message)
     }
 
     private func showTimelineBookmarkHoverPreview(bookmarkID: BookmarkID, anchorRectInWindow: NSRect) {
@@ -2546,34 +2422,6 @@ final class InlineSelectionTimelineView: NSView {
         if let newID, let bookmark = bookmarks.first(where: { $0.id == newID }) {
             let rectInWindow = convert(bookmarkRect(for: bookmark), to: nil)
             onBookmarkMarkerHoverEnter?(newID, rectInWindow)
-        }
-    }
-}
-
-private enum FinderSelectionError: Error {
-    case noSelection
-    case automationDenied
-    case noSelectionWithDetails(String)
-
-    var title: String {
-        switch self {
-        case .noSelection:
-            return "No Finder Selection"
-        case .automationDenied:
-            return "Finder Access Needed"
-        case .noSelectionWithDetails:
-            return "No Finder Selection"
-        }
-    }
-
-    var message: String {
-        switch self {
-        case .noSelection:
-            return "Select a file in Finder first, then run the shortcut."
-        case .automationDenied:
-            return "Allow QuickPreview to control Finder in System Settings > Privacy & Security > Automation."
-        case let .noSelectionWithDetails(details):
-            return "Finder did not report a selected file. Select one file in Finder and try again.\n\nDiagnostics: \(details)"
         }
     }
 }
