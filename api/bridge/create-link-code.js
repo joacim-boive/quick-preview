@@ -26,6 +26,11 @@ module.exports = function handler(req, res) {
       downloadURL: safeURL("/pro/download/"),
     });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : "Could not create a link code." });
+    res.status(500).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not create a link code.",
+    });
   }
 };
