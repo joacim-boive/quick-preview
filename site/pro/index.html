@@ -3,32 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>QuickPreview Pricing | Mac App Store Subscription + PRO Bonus</title>
+    <title>QuickPreview PRO | Finder Follow for Subscribers</title>
     <meta
       name="description"
-      content="QuickPreview includes a generous 30-day trial, then costs $1.95/month through the Mac App Store. Active subscribers can also unlock QuickPreview PRO from the website at no extra charge."
+      content="QuickPreview PRO adds Finder live-follow for active QuickPreview subscribers. Link your App Store subscription, download the direct edition, and sign in on your Mac."
     />
     <meta name="theme-color" content="#07131c" />
-    <meta property="og:type" content="website" />
-    <meta
-      property="og:title"
-      content="QuickPreview Pricing | 30-Day Trial on Mac App Store"
-    />
-    <meta
-      property="og:description"
-      content="Try QuickPreview free for 30 days, then continue at a simple monthly price from the Mac App Store."
-    />
-    <meta property="og:image" content="../assets/og-preview.svg" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta
-      name="twitter:title"
-      content="QuickPreview Pricing | 30-Day Trial on Mac App Store"
-    />
-    <meta
-      name="twitter:description"
-      content="Simple pricing: 30-day trial, then $1.95/month cheaper than a triple-shot caramel oat-milk mocha with vanilla cold foam and extra drizzle."
-    />
-    <meta name="twitter:image" content="../assets/og-preview.svg" />
     <link rel="icon" href="../assets/brand-icon.png" type="image/png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -45,13 +25,7 @@
       <header class="site-header">
         <div class="container header-inner">
           <a class="brand" href="../" aria-label="QuickPreview home">
-            <img
-              class="brand-mark"
-              src="../assets/brand-icon.png"
-              alt=""
-              width="48"
-              height="48"
-            />
+            <img class="brand-mark" src="../assets/brand-icon.png" alt="" width="48" height="48" />
             <span class="brand-text">
               <strong>QuickPreview</strong>
               <span>Fast video review for macOS</span>
@@ -82,8 +56,8 @@
           >
             <a href="../">Home</a>
             <a href="../features/">Features</a>
-            <a class="is-active" href="./">Pricing</a>
-            <a href="../pro/">QuickPreview PRO</a>
+            <a href="../pricing/">Pricing</a>
+            <a class="is-active" href="./">QuickPreview PRO</a>
             <a href="../changelog/">Changelog</a>
             <a href="../support/">Support</a>
           </nav>
@@ -94,12 +68,12 @@
         <section class="page-hero">
           <div class="container">
             <div class="section-heading">
-              <p class="eyebrow">Pricing</p>
-              <h1 class="display">One subscription. Two editions.</h1>
+              <p class="eyebrow">Subscriber bonus</p>
+              <h1 class="display">QuickPreview PRO keeps the Finder workflow alive.</h1>
               <p class="section-copy">
-                Start with a generous free trial, keep billing in the Mac App Store,
-                and unlock the direct-download QuickPreview PRO edition at no extra charge
-                when you want Finder live-follow.
+                The Mac App Store edition stays sandbox-safe and complete on its own.
+                QuickPreview PRO is the direct-download edition for active subscribers
+                who want live Finder-follow and the arrow-key workflow that feels like Preview.
               </p>
             </div>
           </div>
@@ -108,25 +82,24 @@
         <section class="section">
           <div class="container card-grid card-grid-3">
             <article class="feature-card">
-              <h3>30-day free trial</h3>
+              <h3>1. Stay subscribed</h3>
               <p class="card-copy">
-                Try the full QuickPreview experience for 30 days with no
-                workflow limits.
+                Keep your QuickPreview subscription active in the Mac App Store.
+                That remains the billing source of truth.
               </p>
             </article>
             <article class="feature-card">
-              <h3>After trial pricing</h3>
+              <h3>2. Link the subscription</h3>
               <p class="card-copy">
-                Then it is just <strong>$1.95/month</strong> - cheaper than a
-                triple-shot caramel oat-milk mocha with vanilla cold foam and
-                extra drizzle at your local coffee shop.
+                Enter the same email you want to use for QuickPreview PRO, then open
+                the App Store build on your Mac to finish the link.
               </p>
             </article>
             <article class="feature-card">
-              <h3>QuickPreview PRO included</h3>
+              <h3>3. Download and sign in</h3>
               <p class="card-copy">
-                Active subscribers can link their account on the website and use
-                QuickPreview PRO with Finder live-follow at no extra charge.
+                After the Mac App Store app confirms your active access, download the
+                direct edition and open it with the mirrored unlock token.
               </p>
             </article>
           </div>
@@ -135,21 +108,29 @@
         <section class="section">
           <div class="container">
             <div class="cta-band">
-              <h2 class="display">Ready to try QuickPreview?</h2>
+              <h2 class="display">Start the link from this browser</h2>
               <p>
-                Download from the Mac App Store to start your trial, then use the
-                subscriber portal when you want the QuickPreview PRO workflow.
+                This creates a one-time deep link for the Mac App Store edition to
+                confirm your current subscription and issue a QuickPreview PRO token.
+              </p>
+              <form class="button-row" data-create-link-form>
+                <label class="sr-only" for="pro-email">Email</label>
+                <input
+                  id="pro-email"
+                  name="email"
+                  type="email"
+                  placeholder="name@example.com"
+                  required
+                  style="min-width: 260px; padding: 12px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.18); background: rgba(7,19,28,0.65); color: #fff;"
+                />
+                <button class="button button-primary" type="submit">Create App Link</button>
+              </form>
+              <p class="caption" data-link-status>
+                The generated deep link opens the Mac App Store edition on this Mac.
               </p>
               <div class="button-row">
-                <a
-                  class="button button-primary"
-                  href="https://apps.apple.com/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Download on Mac App Store
-                </a>
-                <a class="button button-secondary" href="../pro/">QuickPreview PRO</a>
+                <a class="button button-secondary" href="download/">Open download guide</a>
+                <a class="button button-secondary" href="../support/">Read support notes</a>
               </div>
             </div>
           </div>
@@ -159,8 +140,7 @@
       <footer class="site-footer">
         <div class="container footer-inner">
           <p class="footer-copy">
-            Copyright <span data-year></span> QuickPreview. Built for fast macOS
-            video review.
+            Copyright <span data-year></span> QuickPreview. Built for fast macOS video review.
           </p>
         </div>
       </footer>

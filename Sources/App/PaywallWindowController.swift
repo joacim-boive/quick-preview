@@ -14,6 +14,7 @@ final class PaywallWindowController: NSWindowController {
     var onSubscribe: (() -> Void)?
     var onRestorePurchases: (() -> Void)?
     var onManageSubscription: (() -> Void)?
+    var onOpenAccountPortal: (() -> Void)?
     var onShowHelp: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -252,7 +253,7 @@ final class PaywallWindowController: NSWindowController {
         secondaryActionsContainer.layer?.borderWidth = 1
         secondaryActionsContainer.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.18).cgColor
 
-        [restoreButton].forEach { button in
+        [restoreButton, manageButton, helpButton].forEach { button in
             button.target = self
             button.bezelStyle = .rounded
             button.controlSize = .small
@@ -273,7 +274,7 @@ final class PaywallWindowController: NSWindowController {
         secondaryButtonRow.alignment = .centerY
         secondaryButtonRow.distribution = .fillProportionally
         secondaryButtonRow.spacing = 0
-        [restoreButton].forEach(secondaryButtonRow.addArrangedSubview(_:))
+        [restoreButton, manageButton, helpButton].forEach(secondaryButtonRow.addArrangedSubview(_:))
         secondaryActionsContainer.addSubview(secondaryButtonRow)
     }
 
@@ -309,16 +310,31 @@ final class PaywallWindowController: NSWindowController {
 
         subscribeButton.isEnabled = !isBusy && !subscribeButton.isHidden
         restoreButton.isEnabled = !isBusy && !secondaryButtonRow.isHidden
-        manageButton.isHidden = true
-        helpButton.isHidden = true
+        manageButton.isHidden = false
+        manageButton.isEnabled = !isBusy && !secondaryButtonRow.isHidden
+        helpButton.isHidden = AppEdition.current == .pro
+        helpButton.isEnabled = !isBusy && !helpButton.isHidden
         quitButton.isEnabled = !isBusy
 
+        if AppEdition.current == .pro {
+            restoreButton.title = "Open Account Portal"
+            manageButton.title = "QuickPreview PRO Help"
+        } else {
+            restoreButton.title = "Restore Purchases"
+            manageButton.title = "Manage Subscription"
+            helpButton.title = "Account & QuickPreview PRO"
+        }
+
         if isBusy {
-            subscribeButton.title = "Contacting App Store..."
+            subscribeButton.title = AppEdition.current == .appStore ? "Contacting App Store..." : "Checking QuickPreview PRO access..."
         }
     }
 
     private func primaryActionTitle(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            return "Open Account Portal"
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Subscribe"
@@ -335,6 +351,10 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func productPriceText(from productDetails: PaywallProductDetails?) -> String {
+        if AppEdition.current == .pro {
+            return "Included"
+        }
+
         guard let productDetails else {
             return "$1.99 / month"
         }
@@ -347,6 +367,21 @@ final class PaywallWindowController: NSWindowController {
         productDetails: PaywallProductDetails?
     ) -> String {
         let productName = productDetails?.displayName ?? "QuickPreview"
+
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked, .notEntitled:
+                return "QuickPreview PRO is included for active QuickPreview subscribers. Link your App Store subscription through the account portal, then sign in here to unlock Finder integration."
+            case .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "QuickPreview PRO checks your mirrored subscriber access through the account portal before opening the player."
+            }
+        }
 
         switch accessState {
         case .expired:
@@ -369,6 +404,21 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func titleText(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked, .notEntitled:
+                return "Sign in to QuickPreview PRO"
+            case .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "Checking QuickPreview PRO access"
+            }
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Subscribe to continue"
@@ -385,6 +435,22 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func subtitleText(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked:
+                return "Included for active QuickPreview subscribers"
+            case .notEntitled,
+                 .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "Use the account portal to link and validate access"
+            }
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Billed monthly unless canceled"
@@ -401,6 +467,22 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func legalText(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked:
+                return "QuickPreview PRO does not bill directly. Keep your QuickPreview subscription active in the Mac App Store, then relink access through the account portal if needed."
+            case .notEntitled,
+                 .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "Your PRO unlock is mirrored from an active QuickPreview subscription and periodically revalidated through the account portal."
+            }
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Payment is handled by Apple. Subscription management and renewal settings are available in the App Store."
@@ -425,19 +507,31 @@ final class PaywallWindowController: NSWindowController {
     @objc
     private func handleRestore(_ sender: Any?) {
         _ = sender
-        onRestorePurchases?()
+        if AppEdition.current == .pro {
+            onOpenAccountPortal?()
+        } else {
+            onRestorePurchases?()
+        }
     }
 
     @objc
     private func handleManage(_ sender: Any?) {
         _ = sender
-        onManageSubscription?()
+        if AppEdition.current == .pro {
+            onShowHelp?()
+        } else {
+            onManageSubscription?()
+        }
     }
 
     @objc
     private func handleHelp(_ sender: Any?) {
         _ = sender
-        onShowHelp?()
+        if AppEdition.current == .pro {
+            onShowHelp?()
+        } else {
+            onOpenAccountPortal?()
+        }
     }
 
     @objc

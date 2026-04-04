@@ -41,6 +41,7 @@ final class SubscriptionController {
 
     private let configuration: SubscriptionConfiguration
     private let entitlementCache: EntitlementCache
+    private let proEntitlementBridge: ProEntitlementBridge?
     private let nowProvider: () -> Date
     private var updatesTask: Task<Void, Never>?
 
@@ -94,10 +95,12 @@ final class SubscriptionController {
     init(
         configuration: SubscriptionConfiguration = .default,
         entitlementCache: EntitlementCache = EntitlementCache(),
+        proEntitlementBridge: ProEntitlementBridge? = nil,
         nowProvider: @escaping () -> Date = Date.init
     ) {
         self.configuration = configuration
         self.entitlementCache = entitlementCache
+        self.proEntitlementBridge = proEntitlementBridge
         self.nowProvider = nowProvider
     }
 
@@ -107,6 +110,7 @@ final class SubscriptionController {
 
     func start() {
         guard updatesTask == nil else { return }
+        guard AppEdition.current == .appStore else { return }
 
         updatesTask = Task { [weak self] in
             await self?.observeTransactionUpdates()
@@ -123,6 +127,12 @@ final class SubscriptionController {
             let devState: SubscriptionAccessState = .subscriptionActive(snapshot)
             accessState = devState
             return devState
+        }
+
+        if AppEdition.current == .pro {
+            let proState = await refreshProEntitlements(verifiedAt: verifiedAt)
+            accessState = proState
+            return proState
         }
 
         do {
@@ -153,6 +163,10 @@ final class SubscriptionController {
     }
 
     func purchaseSubscription() async -> SubscriptionPurchaseResult {
+        if AppEdition.current == .pro {
+            return .failed("QuickPreview PRO access is included for active App Store subscribers. Open the account portal from the PRO app to link access.")
+        }
+
         do {
             let product = try await loadProduct()
             let purchaseResult = try await product.purchase()
@@ -179,6 +193,13 @@ final class SubscriptionController {
     }
 
     func restorePurchases() async -> SubscriptionRestoreResult {
+        if AppEdition.current == .pro {
+            let refreshedState = await refreshEntitlements()
+            return refreshedState.isEntitled
+                ? .restored(refreshedState)
+                : .failed("QuickPreview PRO does not restore purchases directly. Link an active QuickPreview subscription through the account portal.")
+        }
+
         do {
             try await AppStore.sync()
             let refreshedState = await refreshEntitlements()
@@ -189,7 +210,14 @@ final class SubscriptionController {
     }
 
     func openManageSubscriptions() {
-        guard let url = URL(string: "https://apps.apple.com/account/subscriptions") else {
+        let urlString: String
+        if AppEdition.current == .pro {
+            urlString = AppEdition.current.accountPortalURL?.absoluteString ?? "https://quickpreview.app/pro/"
+        } else {
+            urlString = "https://apps.apple.com/account/subscriptions"
+        }
+
+        guard let url = URL(string: urlString) else {
             return
         }
 
@@ -240,6 +268,56 @@ final class SubscriptionController {
         }
 
         return nil
+    }
+
+    private func refreshProEntitlements(verifiedAt: Date) async -> SubscriptionAccessState {
+        guard let proEntitlementBridge else {
+            entitlementCache.clear()
+            return .notEntitled
+        }
+
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.jboive.quickpreview.pro"
+
+        do {
+            let entitlementSnapshot = try await proEntitlementBridge.refreshEntitlement(bundleIdentifier: bundleIdentifier)
+            let resolvedState = makeProAccessState(from: entitlementSnapshot, verifiedAt: verifiedAt)
+            persistVerifiedAccessStateIfNeeded(resolvedState)
+            return resolvedState
+        } catch {
+            if let fallbackState = offlineFallbackState(from: entitlementCache.load(), now: verifiedAt) {
+                return fallbackState
+            }
+
+            entitlementCache.clear()
+            return .notEntitled
+        }
+    }
+
+    private func makeProAccessState(
+        from entitlementSnapshot: ProEntitlementSnapshot,
+        verifiedAt: Date
+    ) -> SubscriptionAccessState {
+        let snapshot = EntitlementSnapshot(
+            productID: configuration.productID,
+            grantKind: entitlementSnapshot.status == .gracePeriod ? .appStoreGracePeriod : .subscriptionActive,
+            lastVerifiedAt: verifiedAt,
+            expirationDate: entitlementSnapshot.expiresAt,
+            transactionID: nil,
+            originalTransactionID: nil
+        )
+
+        switch entitlementSnapshot.status {
+        case .active:
+            return .subscriptionActive(snapshot)
+        case .gracePeriod:
+            return .inGracePeriod(snapshot)
+        case .expired:
+            return .expired
+        case .revoked:
+            return .revoked
+        case .unlinked:
+            return .notEntitled
+        }
     }
 
     private func resolveAccessState(

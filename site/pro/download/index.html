@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Download QuickPreview PRO</title>
+    <meta
+      name="description"
+      content="Download QuickPreview PRO and finish sign-in with your mirrored subscriber access token."
+    />
+    <meta name="theme-color" content="#07131c" />
+    <link rel="icon" href="../../assets/brand-icon.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Teko:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../../assets/styles.css" />
+    <script src="../../assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="site-shell">
+      <header class="site-header">
+        <div class="container header-inner">
+          <a class="brand" href="../../" aria-label="QuickPreview home">
+            <img class="brand-mark" src="../../assets/brand-icon.png" alt="" width="48" height="48" />
+            <span class="brand-text">
+              <strong>QuickPreview</strong>
+              <span>Fast video review for macOS</span>
+            </span>
+          </a>
+
+          <button
+            class="nav-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="site-nav"
+            data-nav-toggle
+          >
+            <span class="sr-only">Toggle navigation</span>
+            <span class="nav-toggle-bars" aria-hidden="true">
+              <span class="nav-toggle-bar"></span>
+              <span class="nav-toggle-bar"></span>
+              <span class="nav-toggle-bar"></span>
+            </span>
+          </button>
+
+          <nav
+            class="site-nav"
+            id="site-nav"
+            aria-label="Primary"
+            data-site-nav
+            data-open="false"
+          >
+            <a href="../../">Home</a>
+            <a href="../../features/">Features</a>
+            <a href="../../pricing/">Pricing</a>
+            <a class="is-active" href="../">QuickPreview PRO</a>
+            <a href="../../changelog/">Changelog</a>
+            <a href="../../support/">Support</a>
+          </nav>
+        </div>
+      </header>
+
+      <main id="main">
+        <section class="page-hero">
+          <div class="container">
+            <div class="section-heading">
+              <p class="eyebrow">Download</p>
+              <h1 class="display">Finish QuickPreview PRO on this Mac.</h1>
+              <p class="section-copy">
+                Use the direct edition when you want Finder live-follow. Your billing
+                still stays in the Mac App Store edition.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container card-grid card-grid-3">
+            <article class="feature-card">
+              <h3>Download the app</h3>
+              <p class="card-copy">
+                Install the signed direct edition on the Mac where you want Finder-follow.
+              </p>
+              <p><a class="button button-primary" href="/downloads/QuickPreviewPro.zip">Download QuickPreview PRO</a></p>
+            </article>
+            <article class="feature-card">
+              <h3>Apply the token</h3>
+              <p class="card-copy" data-download-token-state>
+                Open the app with your mirrored access token from this page after the download finishes.
+              </p>
+              <p><a class="button button-secondary" href="#" data-pro-session-link>Open QuickPreview PRO</a></p>
+            </article>
+            <article class="feature-card">
+              <h3>Need a fresh token?</h3>
+              <p class="card-copy">
+                Go back to the Mac App Store edition, open <strong>Account &amp; QuickPreview PRO</strong>,
+                and relink the subscription from your subscriber portal.
+              </p>
+              <p><a class="button button-secondary" href="../">Back to subscriber portal</a></p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container">
+            <div class="cta-band">
+              <h2 class="display">Token status</h2>
+              <p data-pro-email>Waiting for a linked subscriber token.</p>
+              <p class="caption">
+                The PRO app stores the mirrored token locally, revalidates it with the bridge,
+                and falls back to grace behavior if the network is temporarily unavailable.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <div class="container footer-inner">
+          <p class="footer-copy">
+            Copyright <span data-year></span> QuickPreview. Built for fast macOS video review.
+          </p>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -13,10 +13,10 @@ enum BackgroundShortcutConfiguration {
         let shortcutID: String
     }
 
-    static let sharedDefaultsSuiteName = "group.com.jboive.quickpreview.shared"
-    static let helperBundleIdentifier = "com.jboive.quickpreview.launcher"
-    static let helperAppName = "QuickPreviewLauncher"
-    static let shortcutInvocationURLString = "quickpreview://shortcut"
+    static let sharedDefaultsSuiteName = AppEdition.current.sharedContainerIdentifier
+    static let helperBundleIdentifier = AppEdition.current.helperBundleIdentifier
+    static let helperAppName = AppEdition.current.helperAppName
+    static let shortcutInvocationURLString = "\(AppEdition.current.urlScheme)://shortcut"
     static let startupPromptDefaultsKey = "backgroundShortcutStartupPromptShown"
     static let selectedShortcutDefaultsKey = "backgroundShortcutSelection"
     static let availableShortcuts = [

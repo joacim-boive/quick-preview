@@ -45,6 +45,9 @@
 		100001000000000000000037 /* ServiceManagement.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000007 /* ServiceManagement.framework */; };
 		100001000000000000000038 /* QuickPreviewLauncher.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = 100000600000000000000002 /* QuickPreviewLauncher.app */; };
 		100001000000000000000039 /* FinderSelectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000017 /* FinderSelectionService.swift */; };
+		100001000000000000000040 /* AppEdition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000018 /* AppEdition.swift */; };
+		100001000000000000000041 /* ProEntitlementBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000019 /* ProEntitlementBridge.swift */; };
+		100001000000000000000042 /* AppEdition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000018 /* AppEdition.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -95,6 +98,8 @@
 		100000100000000000000015 /* LauncherMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherMain.swift; sourceTree = "<group>"; };
 		100000100000000000000016 /* BackgroundShortcutConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundShortcutConfiguration.swift; sourceTree = "<group>"; };
 		100000100000000000000017 /* FinderSelectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSelectionService.swift; sourceTree = "<group>"; };
+		100000100000000000000018 /* AppEdition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEdition.swift; sourceTree = "<group>"; };
+		100000100000000000000019 /* ProEntitlementBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProEntitlementBridge.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
@@ -103,6 +108,8 @@
 		100000100000000000000206 /* QuickPreviewLauncher.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickPreviewLauncher.entitlements; sourceTree = "<group>"; };
 		100000100000000000000207 /* QuickPreview.storekit */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = QuickPreview.storekit; sourceTree = SOURCE_ROOT; };
 		100000100000000000000208 /* QuickPreviewProduction.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickPreviewProduction.entitlements; sourceTree = "<group>"; };
+		100000100000000000000209 /* QuickPreviewPro.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickPreviewPro.entitlements; sourceTree = "<group>"; };
+		100000100000000000000210 /* QuickPreviewProLauncher.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuickPreviewProLauncher.entitlements; sourceTree = "<group>"; };
 		100000300000000000000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000002 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		100000300000000000000003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -195,6 +202,8 @@
 				10000010000000000000000F /* SubscriptionAccessState.swift */,
 				100000100000000000000010 /* EntitlementCache.swift */,
 				100000100000000000000016 /* BackgroundShortcutConfiguration.swift */,
+				100000100000000000000018 /* AppEdition.swift */,
+				100000100000000000000019 /* ProEntitlementBridge.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -207,6 +216,8 @@
 				100000100000000000000205 /* QuickPreview.entitlements */,
 				100000100000000000000206 /* QuickPreviewLauncher.entitlements */,
 				100000100000000000000208 /* QuickPreviewProduction.entitlements */,
+				100000100000000000000209 /* QuickPreviewPro.entitlements */,
+				100000100000000000000210 /* QuickPreviewProLauncher.entitlements */,
 				100000100000000000000202 /* Assets.xcassets */,
 				100000100000000000000203 /* quickpreview-guide-infographic.png */,
 			);
@@ -346,6 +357,8 @@
 				100001000000000000000024 /* SubscriptionController.swift in Sources */,
 				100001000000000000000025 /* PaywallWindowController.swift in Sources */,
 				100001000000000000000039 /* FinderSelectionService.swift in Sources */,
+				100001000000000000000040 /* AppEdition.swift in Sources */,
+				100001000000000000000041 /* ProEntitlementBridge.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,
@@ -363,6 +376,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				100001000000000000000042 /* AppEdition.swift in Sources */,
 				100001000000000000000030 /* LauncherAppDelegate.swift in Sources */,
 				100001000000000000000031 /* LauncherMain.swift in Sources */,
 				100001000000000000000032 /* BackgroundShortcutConfiguration.swift in Sources */,
@@ -385,7 +399,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewDebug.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewPro.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 7;
@@ -394,8 +408,10 @@
 				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.pro;
+				PRODUCT_NAME = "QuickPreview Pro";
+				QUICKPREVIEW_URL_SCHEME = "quickpreview-pro";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG PRO_EDITION";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -404,7 +420,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewProduction.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 7;
@@ -416,6 +432,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				QUICKPREVIEW_URL_SCHEME = quickpreview;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APPSTORE_EDITION";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -423,16 +441,17 @@
 		100001300000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewLauncher.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewProLauncher.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = U34874Z88E;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.launcher;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.pro.launcher;
 				PRODUCT_NAME = QuickPreviewLauncher;
 				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG PRO_EDITION";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -450,9 +469,50 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.launcher;
 				PRODUCT_NAME = QuickPreviewLauncher;
 				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) APPSTORE_EDITION";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
+		};
+		100001300000000000000007 /* Pro */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewPro.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 7;
+				DEVELOPMENT_TEAM = U34874Z88E;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "Sources/Resources/App-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.pro;
+				PRODUCT_NAME = "QuickPreview Pro";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				QUICKPREVIEW_URL_SCHEME = "quickpreview-pro";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) PRO_EDITION";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Pro;
+		};
+		100001300000000000000008 /* Pro */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Sources/Resources/QuickPreviewProLauncher.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 7;
+				DEVELOPMENT_TEAM = U34874Z88E;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "Sources/Resources/Launcher-Info.plist";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jboive.quickpreview.pro.launcher;
+				PRODUCT_NAME = QuickPreviewLauncher;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) PRO_EDITION";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Pro;
 		};
 		100001300000000000000005 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -483,6 +543,19 @@
 			};
 			name = Release;
 		};
+		100001300000000000000009 /* Pro */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Pro;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -491,6 +564,7 @@
 			buildConfigurations = (
 				100001300000000000000001 /* Debug */,
 				100001300000000000000002 /* Release */,
+				100001300000000000000007 /* Pro */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -500,6 +574,7 @@
 			buildConfigurations = (
 				100001300000000000000003 /* Debug */,
 				100001300000000000000004 /* Release */,
+				100001300000000000000008 /* Pro */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -509,6 +584,7 @@
 			buildConfigurations = (
 				100001300000000000000005 /* Debug */,
 				100001300000000000000006 /* Release */,
+				100001300000000000000009 /* Pro */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

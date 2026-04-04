@@ -34,8 +34,16 @@ body {
   min-width: 320px;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(64, 183, 255, 0.18), transparent 30%),
-    radial-gradient(circle at top right, rgba(255, 209, 102, 0.16), transparent 24%),
+    radial-gradient(
+      circle at top left,
+      rgba(64, 183, 255, 0.18),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(255, 209, 102, 0.16),
+      transparent 24%
+    ),
     linear-gradient(180deg, #071019 0%, #081722 35%, #06131b 100%);
   font-family: "Manrope", "Helvetica Neue", Helvetica, sans-serif;
   line-height: 1.6;
@@ -224,7 +232,9 @@ button {
   height: 2px;
   border-radius: 999px;
   background: currentColor;
-  transition: transform 180ms ease, opacity 180ms ease;
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease;
 }
 
 .nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) {
@@ -250,7 +260,10 @@ button {
   border-radius: 999px;
   color: var(--muted);
   font-weight: 700;
-  transition: color 180ms ease, background 180ms ease, transform 180ms ease;
+  transition:
+    color 180ms ease,
+    background 180ms ease,
+    transform 180ms ease;
 }
 
 .site-nav a:hover,
@@ -278,7 +291,10 @@ button {
   border-radius: 999px;
   font-weight: 800;
   letter-spacing: 0.03em;
-  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
 }
 
 .button:hover,
@@ -356,7 +372,11 @@ button {
   position: relative;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
-  background: linear-gradient(180deg, rgba(16, 38, 51, 0.92), rgba(8, 20, 30, 0.9));
+  background: linear-gradient(
+    180deg,
+    rgba(16, 38, 51, 0.92),
+    rgba(8, 20, 30, 0.9)
+  );
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -367,8 +387,16 @@ button {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 18% 18%, rgba(108, 228, 255, 0.22), transparent 24%),
-    radial-gradient(circle at 82% 12%, rgba(255, 209, 102, 0.18), transparent 22%);
+    radial-gradient(
+      circle at 18% 18%,
+      rgba(108, 228, 255, 0.22),
+      transparent 24%
+    ),
+    radial-gradient(
+      circle at 82% 12%,
+      rgba(255, 209, 102, 0.18),
+      transparent 22%
+    );
   pointer-events: none;
 }
 
@@ -436,7 +464,11 @@ button {
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, rgba(10, 25, 36, 0.88), rgba(8, 20, 30, 0.96));
+  background: linear-gradient(
+    180deg,
+    rgba(10, 25, 36, 0.88),
+    rgba(8, 20, 30, 0.96)
+  );
   box-shadow: var(--shadow);
 }
 
@@ -570,7 +602,11 @@ button {
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, rgba(10, 25, 36, 0.9), rgba(8, 20, 30, 0.96));
+  background: linear-gradient(
+    180deg,
+    rgba(10, 25, 36, 0.9),
+    rgba(8, 20, 30, 0.96)
+  );
   box-shadow: var(--shadow);
 }
 
@@ -761,7 +797,9 @@ button {
     opacity: 0;
     pointer-events: none;
     transform: translateY(-8px);
-    transition: opacity 180ms ease, transform 180ms ease;
+    transition:
+      opacity 180ms ease,
+      transform 180ms ease;
   }
 
   .site-nav[data-open="true"] {
