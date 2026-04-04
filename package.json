@@ -1,0 +1,11 @@
+{
+  "name": "quick-preview",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "rm -rf public && mkdir -p public && cp -R site/. public/",
+    "vercel-build": "npm run build"
+  }
+}

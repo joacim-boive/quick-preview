@@ -4,3 +4,5 @@ DerivedData/
 QuickPreview.xcodeproj/xcuserdata/
 QuickPreview.xcodeproj/project.xcworkspace/xcuserdata/
 .history
+public/
+.vercel/output

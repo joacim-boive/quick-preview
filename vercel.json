@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
+  "framework": null,
+  "functions": {
+    "api/bridge/create-link-code.js": { "maxDuration": 10 },
+    "api/bridge/link-app-store.js": { "maxDuration": 10 },
+    "api/bridge/validate-pro.js": { "maxDuration": 10 }
+  }
+}

@@ -43,6 +43,46 @@ QuickPreview now supports two distribution paths:
 
 The App Store edition remains the billing source of truth. The PRO edition uses a mirrored unlock token delivered through the website bridge flow in `site/pro/` and `api/bridge/`.
 
+## Website and subscriber bridge (Vercel)
+
+The whole Git repo is correct to connect to Vercel, but the **Vercel project root must be the repository root** (not `site/`). The build runs **`npm run build`**, which copies `site/` into **`public/`** for static hosting. Serverless routes must stay at **`api/bridge/`** relative to that same root. `vercel.json` sets **`outputDirectory`: `public`**, **`buildCommand`**, and a short **`maxDuration`** on the bridge routes.
+
+### If the homepage is wrong or `/api/bridge/*` is 404
+
+In **Project → Settings → General**:
+
+- **Root Directory** — leave **empty** (or `.`). If you set this to `site`, Vercel never sees `api/`, so the bridge breaks. The app source HTML stays in `site/`; only the **build output** is `public/`.
+
+In **Project → Settings → Build & Deployment**:
+
+- **Framework Preset** — **Other** (or let `vercel.json` drive the build).
+- **Build Command** — `npm run build` (or enable **“Use vercel.json”** / clear overrides so `vercel.json` is used).
+- **Output Directory** — `public` (or rely on `vercel.json` and clear conflicting dashboard values).
+
+After fixing settings, run **Redeploy** on the latest commit.
+
+### One-time: Vercel project and env
+
+1. [Create a project](https://vercel.com/new) from this Git repo (or run `vercel link` locally after `vercel login`).
+2. In **Project → Settings → Environment Variables**, add for **Production** (and **Preview** if you test linking on preview URLs):
+   - **`QUICKPREVIEW_BRIDGE_SECRET`** — long random string (server-only; signs link codes and PRO tokens).
+   - **`QUICKPREVIEW_SITE_URL`** — `https://quickpreview.boive.se` so bridge responses use your canonical host (previews fall back to `VERCEL_URL` when unset).
+3. **Project → Settings → Domains**: add `quickpreview.boive.se` and point DNS as instructed so **static pages and** `/api/bridge/*` **share the same origin** (required for `fetch("/api/bridge/...")` on `/pro/` and for the Mac app’s `bridgeAPIBaseURL`).
+
+### CI (optional)
+
+The workflow `.github/workflows/vercel-deploy.yml` deploys with **`vercel pull` → `vercel build` → `vercel deploy --prebuilt`** ([Vercel CI pattern](https://vercel.com/docs/deployments/git/vercel-for-github)). Add repository secrets **`VERCEL_TOKEN`**, **`VERCEL_ORG_ID`**, and **`VERCEL_PROJECT_ID`**. If you use only Vercel’s Git integration, you can skip this workflow and rely on automatic deployments.
+
+### Local CLI
+
+```bash
+vercel login
+vercel link
+vercel env add QUICKPREVIEW_BRIDGE_SECRET production
+vercel env add QUICKPREVIEW_SITE_URL production
+vercel deploy --prod
+```
+
 ## Finder Selection Follow
 
 Finder selection follow is available in the `Pro` build configuration. Once a video is loaded, selecting a different video in Finder automatically switches playback to that selected file while the mirrored PRO entitlement remains active.

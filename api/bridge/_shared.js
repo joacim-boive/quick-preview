@@ -61,9 +61,21 @@ function verifySignedPayload(token) {
   return JSON.parse(payloadJSON);
 }
 
+function siteBaseURL() {
+  const explicit = process.env.QUICKPREVIEW_SITE_URL;
+  if (explicit && String(explicit).trim()) {
+    return String(explicit).replace(/\/$/, "");
+  }
+  const vercel = process.env.VERCEL_URL;
+  if (vercel && String(vercel).trim()) {
+    const host = String(vercel).replace(/^https?:\/\//i, "");
+    return `https://${host}`;
+  }
+  return "https://quickpreview.boive.se";
+}
+
 function safeURL(pathname, query = {}) {
-  const baseURL = process.env.QUICKPREVIEW_SITE_URL || "https://quickpreview.app";
-  const url = new URL(pathname, baseURL);
+  const url = new URL(pathname, `${siteBaseURL()}/`);
 
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== "") {

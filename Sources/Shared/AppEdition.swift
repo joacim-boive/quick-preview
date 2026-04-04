@@ -63,21 +63,21 @@ enum AppEdition: String {
     var accountPortalURL: URL? {
         switch self {
         case .appStore:
-            return URL(string: "https://quickpreview.app/pro/")
+            return URL(string: "https://quickpreview.boive.se/pro/")
         case .pro:
-            return URL(string: "https://quickpreview.app/pro/download/")
+            return URL(string: "https://quickpreview.boive.se/pro/download/")
         }
     }
 
     var proDownloadURL: URL? {
-        URL(string: "https://quickpreview.app/pro/download/")
+        URL(string: "https://quickpreview.boive.se/pro/download/")
     }
 
     var supportURL: URL? {
-        URL(string: "https://quickpreview.app/support/")
+        URL(string: "https://quickpreview.boive.se/support/")
     }
 
     var bridgeAPIBaseURL: URL? {
-        URL(string: "https://quickpreview.app/api/bridge/")
+        URL(string: "https://quickpreview.boive.se/api/bridge/")
     }
 }

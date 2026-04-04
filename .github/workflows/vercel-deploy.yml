@@ -1,0 +1,52 @@
+# Deploy static site + /api/bridge/* serverless routes (see Vercel Deployments & CI/CD guidance).
+# GitHub → Settings → Secrets and variables → Actions:
+#   VERCEL_TOKEN       — https://vercel.com/account/tokens
+#   VERCEL_ORG_ID      — team_… from Vercel → Team Settings, or from `vercel link` → .vercel/project.json orgId
+#   VERCEL_PROJECT_ID  — prj_… from Project → Settings → General
+name: Vercel Deploy
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@50.39.0
+
+      - name: Pull Vercel environment
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+          else
+            vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          fi
+
+      - name: Build
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            vercel build --token="$VERCEL_TOKEN"
+          else
+            vercel build --prod --token="$VERCEL_TOKEN"
+          fi
+
+      - name: Deploy prebuilt
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            vercel deploy --prebuilt --token="$VERCEL_TOKEN"
+          else
+            vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          fi

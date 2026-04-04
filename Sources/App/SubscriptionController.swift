@@ -212,7 +212,7 @@ final class SubscriptionController {
     func openManageSubscriptions() {
         let urlString: String
         if AppEdition.current == .pro {
-            urlString = AppEdition.current.accountPortalURL?.absoluteString ?? "https://quickpreview.app/pro/"
+            urlString = AppEdition.current.accountPortalURL?.absoluteString ?? "https://quickpreview.boive.se/pro/"
         } else {
             urlString = "https://apps.apple.com/account/subscriptions"
         }
