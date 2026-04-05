@@ -235,8 +235,10 @@ struct ProEntitlementValidationRequest: Codable, Equatable {
 final class ProEntitlementBridge {
     private static let sessionDefaultsKey = "proEntitlementSession"
     private static let snapshotDefaultsKey = "proEntitlementSnapshot"
+    private static let bootstrapSessionDefaultsKey = "proEntitlementBootstrapSession"
 
     private let defaults: UserDefaults
+    private let bootstrapDefaults: UserDefaults?
     private let session: URLSession
 
     private(set) var currentSession: ProSession?
@@ -251,6 +253,7 @@ final class ProEntitlementBridge {
 
     init(defaults: UserDefaults = .standard, session: URLSession = .shared) {
         self.defaults = defaults
+        self.bootstrapDefaults = UserDefaults(suiteName: AppEdition.proBootstrapContainerIdentifier)
         self.session = session
 
         if
@@ -346,6 +349,12 @@ final class ProEntitlementBridge {
         QuickPreviewDebugLog.log("link-app-store decoded status=\(decoded.status) email=\(decoded.email ?? "nil") expiresAt=\(String(describing: decoded.expiresAt)) downloadURL=\(decoded.downloadURL.absoluteString)")
 
         if AppEdition.current == .appStore {
+            let proSession = ProSession(
+                accessToken: decoded.proAccessToken,
+                email: decoded.email,
+                linkedAt: Date()
+            )
+            storeBootstrapSession(proSession)
             NSWorkspace.shared.open(decoded.downloadURL)
         }
 
@@ -358,6 +367,7 @@ final class ProEntitlementBridge {
     ) async throws -> ProEntitlementSnapshot {
         let proSession = ProSession(accessToken: accessToken, email: email, linkedAt: Date())
         storeSession(proSession)
+        storeBootstrapSession(proSession)
         return try await refreshEntitlement(bundleIdentifier: Bundle.main.bundleIdentifier ?? "")
     }
 
@@ -367,6 +377,8 @@ final class ProEntitlementBridge {
             storeSnapshot(snapshot)
             return snapshot
         }
+
+        syncBootstrapSessionIfNeeded()
 
         guard
             let currentSession,
@@ -417,6 +429,7 @@ final class ProEntitlementBridge {
         currentSnapshot = nil
         defaults.removeObject(forKey: Self.sessionDefaultsKey)
         defaults.removeObject(forKey: Self.snapshotDefaultsKey)
+        bootstrapDefaults?.removeObject(forKey: Self.bootstrapSessionDefaultsKey)
     }
 
     private func bridgeEndpointURL(path: String) -> URL? {
@@ -482,6 +495,35 @@ final class ProEntitlementBridge {
     private func storeSession(_ proSession: ProSession) {
         currentSession = proSession
         defaults.set(try? JSONEncoder().encode(proSession), forKey: Self.sessionDefaultsKey)
+    }
+
+    private func storeBootstrapSession(_ proSession: ProSession) {
+        bootstrapDefaults?.set(
+            try? JSONEncoder().encode(proSession),
+            forKey: Self.bootstrapSessionDefaultsKey
+        )
+        QuickPreviewDebugLog.log(
+            "Stored shared PRO bootstrap session email=\(proSession.email ?? "nil") linkedAt=\(proSession.linkedAt)"
+        )
+    }
+
+    private func syncBootstrapSessionIfNeeded() {
+        guard
+            let bootstrapDefaults,
+            let data = bootstrapDefaults.data(forKey: Self.bootstrapSessionDefaultsKey),
+            let bootstrapSession = try? JSONDecoder().decode(ProSession.self, from: data)
+        else {
+            return
+        }
+
+        if let currentSession, currentSession.linkedAt >= bootstrapSession.linkedAt {
+            return
+        }
+
+        storeSession(bootstrapSession)
+        QuickPreviewDebugLog.log(
+            "Imported shared PRO bootstrap session email=\(bootstrapSession.email ?? "nil") linkedAt=\(bootstrapSession.linkedAt)"
+        )
     }
 
     private func storeSnapshot(_ snapshot: ProEntitlementSnapshot) {

@@ -47,6 +47,9 @@ enum AppEdition: String {
         }
     }
 
+    /// Shared between the App Store app and the direct PRO app for same-Mac access handoff after linking.
+    static let proBootstrapContainerIdentifier = "group.com.jboive.quickpreview.pro.bootstrap"
+
     var helperBundleIdentifier: String {
         switch self {
         case .appStore:
