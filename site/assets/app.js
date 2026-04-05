@@ -1,3 +1,12 @@
+function bridgeCreateLinkURL() {
+  const meta = document.querySelector('meta[name="qp-bridge-api-origin"]');
+  const origin = meta?.getAttribute("content")?.trim().replace(/\/$/, "") ?? "";
+  if (origin) {
+    return `${origin}/api/bridge/create-link-code`;
+  }
+  return "/api/bridge/create-link-code";
+}
+
 const navToggle = document.querySelector("[data-nav-toggle]");
 const siteNav = document.querySelector("[data-site-nav]");
 const yearTarget = document.querySelector("[data-year]");
@@ -44,7 +53,7 @@ if (createLinkForm instanceof HTMLFormElement) {
     }
 
     try {
-      const response = await fetch("/api/bridge/create-link-code", {
+      const response = await fetch(bridgeCreateLinkURL(), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

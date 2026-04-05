@@ -1,8 +1,8 @@
 const {
+  bridgePublicBaseURL,
   decodeBody,
   entitlementStatusFromState,
   normalizeExpirationDate,
-  safeURL,
   signPayload,
   verifySignedPayload,
 } = require("./_shared");
@@ -49,15 +49,24 @@ module.exports = function handler(req, res) {
       refreshAfter: refreshAfter.toISOString(),
     });
 
+    const ticketExpires = new Date(
+      Math.min(expiresAt.getTime(), Date.now() + 10 * 60 * 1000)
+    );
+    const downloadTicket = signPayload({
+      type: "proDownloadTicket",
+      proAccessToken,
+      email: linkPayload.email,
+      exp: ticketExpires.toISOString(),
+    });
+    const downloadPage = new URL("/api/bridge/pro-download", `${bridgePublicBaseURL()}/`);
+    downloadPage.searchParams.set("t", downloadTicket);
+
     res.status(200).json({
       status,
       email: linkPayload.email,
       proAccessToken,
       expiresAt: expiresAt.toISOString(),
-      downloadURL: safeURL("/pro/download/", {
-        token: proAccessToken,
-        email: linkPayload.email,
-      }),
+      downloadURL: downloadPage.toString(),
     });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "Could not link the App Store subscription." });

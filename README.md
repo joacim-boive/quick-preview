@@ -66,8 +66,25 @@ After fixing settings, run **Redeploy** on the latest commit.
 1. [Create a project](https://vercel.com/new) from this Git repo (or run `vercel link` locally after `vercel login`).
 2. In **Project → Settings → Environment Variables**, add for **Production** (and **Preview** if you test linking on preview URLs):
    - **`QUICKPREVIEW_BRIDGE_SECRET`** — long random string (server-only; signs link codes and PRO tokens).
-   - **`QUICKPREVIEW_SITE_URL`** — `https://quickpreview.boive.se` so bridge responses use your canonical host (previews fall back to `VERCEL_URL` when unset).
-3. **Project → Settings → Domains**: add `quickpreview.boive.se` and point DNS as instructed so **static pages and** `/api/bridge/*` **share the same origin** (required for `fetch("/api/bridge/...")` on `/pro/` and for the Mac app’s `bridgeAPIBaseURL`).
+   - **`QUICKPREVIEW_SITE_URL`** — keep **`https://quickpreview.boive.se`** if that is where you host the static `site/` files. The API uses this for absolute **download** and portal links in JSON, **not** as the API hostname.
+   - **`QUICKPREVIEW_ALLOWED_ORIGINS`** — `https://quickpreview.boive.se` (comma-separated if you add more) so the browser can **POST** `create-link-code` from your static portal to Vercel (**CORS**). Do **not** point `QUICKPREVIEW_SITE_URL` at the `*.vercel.app` URL unless you want returned links to go there too.
+3. **Split hosting:** If the marketing site lives on `quickpreview.boive.se` and only **Vercel** runs **`/api/bridge/*`**, set **`bridgeAPIBaseURL`** in `AppEdition.swift` and the **`qp-bridge-api-origin`** meta tags on `site/pro/*.html` to your Vercel **Production** URL (see **Project → Domains**). Re-upload static files to `boive.se` after changing the meta tags.
+
+### Same-origin note
+
+You only need `quickpreview.boive.se` on Vercel if you want **one** host for both static files and API. If the site stays elsewhere, use the split setup above instead of moving DNS for the main domain to Vercel.
+
+### HTTP 401 — “Authentication Required” (HTML from Vercel)
+
+If **`debug.log`** shows **`Bridge HTTP 401`** and a large HTML body mentioning **Vercel authentication** or **deployment protection**, the **Mac app and browsers are not logged into Vercel**, so every request to that deployment is blocked before it reaches **`/api/bridge/*`**.
+
+**Fix (dashboard):** [Project → Settings → Deployment Protection](https://vercel.com/docs/deployment-protection). For the environment you use in production (and for **Preview** if the app or portal hits preview URLs), either:
+
+- Turn **off** protection for **Production** (typical for a public marketing site + API), or  
+- Enable **“Only protect Preview Deployments”** (or equivalent) so **production** deployments stay **public**, or  
+- Stop using a **password- / SSO-protected** `*.vercel.app` URL as **`bridgeAPIBaseURL`**; point the app at an **unprotected** production deployment or custom domain.
+
+The subscriber bridge must be callable **without** a Vercel login cookie or bypass token. Do not rely on [protection bypass query parameters](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation) for normal app traffic.
 
 ### CI (optional)
 
@@ -94,8 +111,11 @@ The background shortcut is still optional in both editions. In the App Store edi
 1. Open `QuickPreview.xcodeproj` in Xcode.
 2. Set your Team and bundle identifier for `QuickPreview`.
 3. Use `./Scripts/build.sh` for the guided build menu.
-4. Use `Debug` or `Pro` when you need the direct-distribution behavior.
-5. Use `Release` when you are preparing the Mac App Store edition.
+4. Use **`Debug`** when you need **QuickPreview PRO** (direct build, `quickpreview-pro://`, bundle `com.jboive.quickpreview.pro`). The default **QuickPreview** scheme runs this configuration.
+5. Use **`Release`** for the **Mac App Store** app (`quickpreview://`, bundle `com.jboive.quickpreview`). Use the **QuickPreview App Store** shared scheme to **Run** this from Xcode with the debugger.
+6. Use **`Pro`** (configuration) when you need an optimized direct-distribution PRO build via `./Scripts/build.sh` or the Xcode **Pro** configuration.
+7. **Subscriber portal / `quickpreview://account-link`:** The website opens **`quickpreview://`**, which macOS delivers to whichever **QuickPreview** (App Store edition) owns that scheme—almost always the copy in **`/Applications`** from the App Store, **not** the **QuickPreview Pro** app from **`./Scripts/build.sh debug`**. To test linking against **your** build: run **`./Scripts/build.sh run-appstore`** (builds **Release** and opens **QuickPreview.app**), or use the **QuickPreview App Store** Xcode scheme—then quit or temporarily move the store-installed QuickPreview so the URL opens this build.
+8. **Help → Open Debug Log…** appends bridge/deep-link diagnostics to **`~/Library/Application Support/QuickPreview/debug.log`** (same folder is revealed by **Show Debug Log in Finder**).
 
 ## Build Script
 
@@ -107,6 +127,7 @@ You can also call the exact tasks directly:
 
 - `./Scripts/build.sh debug`
 - `./Scripts/build.sh appstore`
+- `./Scripts/build.sh run-appstore`
 - `./Scripts/build.sh pro`
 - `./Scripts/build.sh archive-appstore`
 - `./Scripts/build.sh archive-pro`

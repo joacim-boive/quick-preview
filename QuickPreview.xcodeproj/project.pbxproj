@@ -48,6 +48,7 @@
 		100001000000000000000040 /* AppEdition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000018 /* AppEdition.swift */; };
 		100001000000000000000041 /* ProEntitlementBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000019 /* ProEntitlementBridge.swift */; };
 		100001000000000000000042 /* AppEdition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000018 /* AppEdition.swift */; };
+		100001000000000000000043 /* QuickPreviewDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000220 /* QuickPreviewDebugLog.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +101,7 @@
 		100000100000000000000017 /* FinderSelectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderSelectionService.swift; sourceTree = "<group>"; };
 		100000100000000000000018 /* AppEdition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEdition.swift; sourceTree = "<group>"; };
 		100000100000000000000019 /* ProEntitlementBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProEntitlementBridge.swift; sourceTree = "<group>"; };
+		100000100000000000000220 /* QuickPreviewDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPreviewDebugLog.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
@@ -204,6 +206,7 @@
 				100000100000000000000016 /* BackgroundShortcutConfiguration.swift */,
 				100000100000000000000018 /* AppEdition.swift */,
 				100000100000000000000019 /* ProEntitlementBridge.swift */,
+				100000100000000000000220 /* QuickPreviewDebugLog.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -359,6 +362,7 @@
 				100001000000000000000039 /* FinderSelectionService.swift in Sources */,
 				100001000000000000000040 /* AppEdition.swift in Sources */,
 				100001000000000000000041 /* ProEntitlementBridge.swift in Sources */,
+				100001000000000000000043 /* QuickPreviewDebugLog.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,

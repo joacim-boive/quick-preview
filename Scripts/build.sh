@@ -26,6 +26,7 @@ Usage:
 Commands:
   debug             Build the direct-distribution Debug configuration.
   appstore          Build the App Store-safe Release configuration.
+  run-appstore      Build Release (App Store app) and open it — use for quickpreview:// / subscriber-portal testing (quit the store install first).
   pro               Build the direct-distribution Pro configuration.
   archive-appstore  Create a Release archive for App Store submission.
   archive-pro       Create a Pro archive for direct-distribution validation.
@@ -38,6 +39,7 @@ Commands:
 Examples:
   ./Scripts/build.sh debug
   ./Scripts/build.sh appstore
+  ./Scripts/build.sh run-appstore
   ./Scripts/build.sh archive-appstore
   ./Scripts/build.sh package-pro
   ./Scripts/build.sh
@@ -92,6 +94,13 @@ app_name_for_configuration() {
   esac
 }
 
+app_path_for_configuration() {
+  local configuration="$1"
+  local app_name
+  app_name="$(app_name_for_configuration "${configuration}")"
+  printf '%s\n' "$(derived_data_path_for_configuration "${configuration}")/Build/Products/${configuration}/${app_name}"
+}
+
 build_configuration() {
   local configuration="$1"
   ensure_directories
@@ -99,10 +108,24 @@ build_configuration() {
   echo "Building ${configuration}..."
   run_xcodebuild "${configuration}" build
 
-  local app_name
-  app_name="$(app_name_for_configuration "${configuration}")"
-  local app_path="$(derived_data_path_for_configuration "${configuration}")/Build/Products/${configuration}/${app_name}"
+  local app_path
+  app_path="$(app_path_for_configuration "${configuration}")"
   echo "Built app: ${app_path}"
+}
+
+run_appstore() {
+  ensure_directories
+  build_configuration "Release"
+  local app_path
+  app_path="$(app_path_for_configuration "Release")"
+  if [[ ! -d "${app_path}" ]]; then
+    echo "Expected app not found at ${app_path}" >&2
+    exit 1
+  fi
+  echo ""
+  echo "Opening App Store edition for quickpreview:// testing."
+  echo "Quit QuickPreview from the Mac App Store (or move it out of /Applications) so this build handles subscriber links."
+  open "${app_path}"
 }
 
 archive_configuration() {
@@ -135,7 +158,8 @@ package_pro() {
   ensure_directories
   build_configuration "Pro"
 
-  local app_path="$(derived_data_path_for_configuration "Pro")/Build/Products/Pro/QuickPreview Pro.app"
+  local app_path
+  app_path="$(app_path_for_configuration "Pro")"
   local zip_path="${PACKAGES_DIR}/QuickPreviewPro.zip"
 
   if [[ ! -d "${app_path}" ]]; then
@@ -173,6 +197,7 @@ interactive_menu() {
 QuickPreview Build Menu
   1) Build Debug (direct-distribution dev build)
   2) Build App Store (Release)
+  2o) Build App Store and open (quickpreview:// / portal testing)
   3) Build PRO
   4) Archive App Store submission build
   5) Archive PRO build
@@ -192,6 +217,9 @@ EOF
         ;;
       2)
         build_configuration "Release"
+        ;;
+      2o)
+        run_appstore
         ;;
       3)
         build_configuration "Pro"
@@ -236,6 +264,9 @@ main() {
       ;;
     appstore)
       build_configuration "Release"
+      ;;
+    run-appstore)
+      run_appstore
       ;;
     pro)
       build_configuration "Pro"

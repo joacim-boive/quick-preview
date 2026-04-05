@@ -6,6 +6,7 @@
   "functions": {
     "api/bridge/create-link-code.js": { "maxDuration": 10 },
     "api/bridge/link-app-store.js": { "maxDuration": 10 },
-    "api/bridge/validate-pro.js": { "maxDuration": 10 }
+    "api/bridge/validate-pro.js": { "maxDuration": 10 },
+    "api/bridge/pro-download.js": { "maxDuration": 10 }
   }
 }

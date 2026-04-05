@@ -1,3 +1,4 @@
+import Carbon
 import Cocoa
 import ServiceManagement
 import StoreKit
@@ -36,8 +37,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let accountPortalMenuItemTag = 4303
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = notification
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        QuickPreviewDebugLog.appendSessionBanner()
         buildMainMenu()
         configureSubscriptionController()
         configureProtectedBookmarksSessionObserver()
@@ -101,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let first = urls.first else { return }
-        if first.scheme == "quickpreview" {
+        if first.scheme == "quickpreview" || first.scheme == AppEdition.current.urlScheme {
             openFromSchemeURL(first)
             return
         }
@@ -110,6 +122,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 self?.ensureWindowController().openVideo(url: first)
             }
         }
+    }
+
+    @objc
+    private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent _: NSAppleEventDescriptor) {
+        guard
+            let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+            let url = URL(string: urlString)
+        else {
+            return
+        }
+        guard url.scheme == "quickpreview" || url.scheme == AppEdition.current.urlScheme else {
+            return
+        }
+        openFromSchemeURL(url)
     }
 
     @objc
@@ -369,11 +395,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 return
             }
             let email = components.queryItems?.first(where: { $0.name == "email" })?.value
-            requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            QuickPreviewDebugLog.log("Deep link account-link received (code \(linkCode.count) chars, email set: \(email != nil))")
+            Task { @MainActor [weak self] in
                 guard let self else { return }
-                Task { @MainActor in
-                    await self.handleAccountLinkCallback(linkCode: linkCode, email: email)
+                if AppEdition.current == .appStore {
+                    self.presentLoadingWindow()
                 }
+                _ = await self.subscriptionController.refreshEntitlements()
+                self.dismissPaywallWindowIfNeeded()
+                await self.handleAccountLinkCallback(linkCode: linkCode, email: email)
             }
         case "pro-session":
             let token = components.queryItems?.first(where: { $0.name == "token" })?.value
@@ -456,6 +486,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         _ = sender
+    }
+
+    @objc
+    private func handleOpenDebugLog(_ sender: Any?) {
+        _ = sender
+        QuickPreviewDebugLog.ensureLogFileExistsForUser()
+        NSWorkspace.shared.open(QuickPreviewDebugLog.logFileURL)
+        QuickPreviewDebugLog.log("Opened debug log from Help menu")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc
+    private func handleRevealDebugLogInFinder(_ sender: Any?) {
+        _ = sender
+        QuickPreviewDebugLog.ensureLogFileExistsForUser()
+        let url = QuickPreviewDebugLog.logFileURL
+        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc
@@ -637,6 +685,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guideItem.target = self
         guideItem.keyEquivalentModifierMask = [.command, .shift]
         helpMenu.addItem(guideItem)
+        helpMenu.addItem(.separator())
+        let openDebugLogItem = NSMenuItem(
+            title: "Open Debug Log…",
+            action: #selector(handleOpenDebugLog(_:)),
+            keyEquivalent: ""
+        )
+        openDebugLogItem.target = self
+        helpMenu.addItem(openDebugLogItem)
+        let revealDebugLogItem = NSMenuItem(
+            title: "Show Debug Log in Finder",
+            action: #selector(handleRevealDebugLogInFinder(_:)),
+            keyEquivalent: ""
+        )
+        revealDebugLogItem.target = self
+        helpMenu.addItem(revealDebugLogItem)
         helpMenuItem.submenu = helpMenu
 
         NSApp.mainMenu = mainMenu
@@ -1439,11 +1502,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 title: "QuickPreview PRO Unlocked",
                 message: "Your active App Store subscription is now linked to \(resolvedEmail). You can download QuickPreview PRO from the website at no extra charge."
             )
+            QuickPreviewDebugLog.log("Account link succeeded for \(resolvedEmail)")
         } catch {
+            QuickPreviewDebugLog.log("Account link failed: \(error.localizedDescription)")
             showInfoAlert(
                 title: "Account Link Failed",
                 message: error.localizedDescription
             )
+            if AppEdition.current == .appStore {
+                let state = subscriptionController.accessState
+                if !state.isEntitled {
+                    presentBlockedPaywall(for: state)
+                }
+            }
         }
     }
 

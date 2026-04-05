@@ -1,6 +1,17 @@
-const { decodeBody, safeURL, signPayload } = require("./_shared");
+const {
+  applyCreateLinkCors,
+  decodeBody,
+  handleCreateLinkCorsPreflight,
+  safeURL,
+  signPayload,
+} = require("./_shared");
 
 module.exports = function handler(req, res) {
+  if (handleCreateLinkCorsPreflight(req, res)) {
+    return;
+  }
+  applyCreateLinkCors(req, res);
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed." });
     return;
