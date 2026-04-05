@@ -132,6 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         else {
             return
         }
+        QuickPreviewDebugLog.log(
+            """
+            Deep link received by bundlePath=\(Bundle.main.bundlePath)
+            bridgeAPIBaseURL=\(AppEdition.current.bridgeAPIBaseURL?.absoluteString ?? "(nil)")
+            url=\(url.absoluteString)
+            """
+        )
         guard url.scheme == "quickpreview" || url.scheme == AppEdition.current.urlScheme else {
             return
         }

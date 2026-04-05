@@ -24,6 +24,15 @@ private enum BridgeAPIJSON {
     static func parseISO8601Date(_ string: String) -> Date? {
         iso8601Fractional.date(from: string) ?? iso8601WholeSecond.date(from: string)
     }
+
+    static func requestJSONEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(iso8601Fractional.string(from: date))
+        }
+        return encoder
+    }
 }
 
 private struct AppStoreLinkResponseDTO: Decodable {
@@ -31,6 +40,8 @@ private struct AppStoreLinkResponseDTO: Decodable {
     let email: String?
     let proAccessToken: String
     let expiresAt: String?
+    /// Ticketed bridge page on Vercel (`/api/bridge/pro-download?...`); required — the app refuses token-in-query marketing URLs.
+    let downloadURL: String?
 }
 
 private struct ProEntitlementSnapshotDTO: Decodable {
@@ -48,6 +59,45 @@ private func logBridgeResponseBody(_ data: Data, context: String) {
     }
 }
 
+/// Rejects legacy marketing-site URLs with `?token=` and ensures ticket links match the app’s configured bridge host.
+private func validateSecureBridgeDownloadURL(_ url: URL) throws {
+    guard url.scheme?.lowercased() == "https" else {
+        throw ProEntitlementBridgeError.missingSecureDownloadLink
+    }
+    guard url.path == "/api/bridge/pro-download" else {
+        QuickPreviewDebugLog.log("downloadURL rejected: path is \(url.path), expected /api/bridge/pro-download")
+        throw ProEntitlementBridgeError.missingSecureDownloadLink
+    }
+    guard let bridgeHost = AppEdition.current.bridgeAPIBaseURL?.host else {
+        throw ProEntitlementBridgeError.bridgeUnavailable
+    }
+    guard url.host == bridgeHost else {
+        QuickPreviewDebugLog.log("downloadURL host mismatch: got \(url.host ?? "?") expected \(bridgeHost) — set QUICKPREVIEW_BRIDGE_PUBLIC_URL on Vercel to this host")
+        throw ProEntitlementBridgeError.missingSecureDownloadLink
+    }
+    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    guard items.contains(where: { $0.name == "t" && !($0.value ?? "").isEmpty }) else {
+        QuickPreviewDebugLog.log("downloadURL rejected: missing ticket query param t")
+        throw ProEntitlementBridgeError.missingSecureDownloadLink
+    }
+    if items.contains(where: { $0.name == "token" }) {
+        QuickPreviewDebugLog.log("downloadURL rejected: legacy token query param")
+        throw ProEntitlementBridgeError.missingSecureDownloadLink
+    }
+}
+
+/// Host shown in debug logs: prefers the URLSession-effective URL so redirects are visible; compares to the request URL.
+private func bridgeLogHost(endpointURL: URL, response: URLResponse) -> String {
+    let requested = endpointURL.host ?? "?"
+    guard let http = response as? HTTPURLResponse, let effectiveHost = http.url?.host else {
+        return requested
+    }
+    if effectiveHost != requested {
+        return "\(effectiveHost) (requested \(requested))"
+    }
+    return effectiveHost
+}
+
 private func decodeAppStoreLinkResponse(from data: Data) throws -> AppStoreLinkResponse {
     let dto = try JSONDecoder().decode(AppStoreLinkResponseDTO.self, from: data)
     let expires: Date?
@@ -56,11 +106,20 @@ private func decodeAppStoreLinkResponse(from data: Data) throws -> AppStoreLinkR
     } else {
         expires = nil
     }
+    let downloadURL = dto.downloadURL.flatMap { raw in
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : URL(string: trimmed)
+    }
+    guard let downloadURL else {
+        throw ProEntitlementBridgeError.missingSecureDownloadLink
+    }
+    try validateSecureBridgeDownloadURL(downloadURL)
     return AppStoreLinkResponse(
         status: dto.status,
         email: dto.email,
         proAccessToken: dto.proAccessToken,
-        expiresAt: expires
+        expiresAt: expires,
+        downloadURL: downloadURL
     )
 }
 
@@ -110,6 +169,7 @@ enum ProEntitlementBridgeError: LocalizedError {
     case accountLinkRequiresSubscription
     case invalidCallback
     case invalidResponse
+    case missingSecureDownloadLink
     case serverError(String)
     case bridgeRequestFailed(url: URL, underlying: Error)
 
@@ -123,6 +183,12 @@ enum ProEntitlementBridgeError: LocalizedError {
             return "QuickPreview received an incomplete account callback."
         case .invalidResponse:
             return "QuickPreview received an unexpected response from the account bridge."
+        case .missingSecureDownloadLink:
+            return """
+            The bridge did not return a valid secure download link (expected https://YOUR_BRIDGE_HOST/api/bridge/pro-download?t=… matching the app).
+
+            On Vercel Production: deploy the latest repo, set environment variable QUICKPREVIEW_BRIDGE_PUBLIC_URL to the same host as bridgeAPIBaseURL in the app (e.g. https://quick-preview-alpha.vercel.app), then redeploy.
+            """
         case let .serverError(message):
             return message
         case let .bridgeRequestFailed(url, underlying):
@@ -156,6 +222,7 @@ struct AppStoreLinkResponse: Codable, Equatable {
     let email: String?
     let proAccessToken: String
     let expiresAt: Date?
+    let downloadURL: URL
 }
 
 struct ProEntitlementValidationRequest: Codable, Equatable {
@@ -239,28 +306,47 @@ final class ProEntitlementBridge {
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(requestBody)
+        request.httpBody = try BridgeAPIJSON.requestJSONEncoder().encode(requestBody)
+        if let bodyData = request.httpBody, let bodyText = String(data: bodyData, encoding: .utf8) {
+            QuickPreviewDebugLog.log(
+                "link-app-store request expirationDate=\(String(describing: snapshot.expirationDate)) body=\(bodyText)"
+            )
+        } else {
+            QuickPreviewDebugLog.log(
+                "link-app-store request expirationDate=\(String(describing: snapshot.expirationDate)) body=(unavailable)"
+            )
+        }
 
         bridgeLogger.info("POST link-app-store host=\(endpointURL.host ?? "?", privacy: .public) url=\(endpointURL.absoluteString, privacy: .public)")
         print("[QuickPreview] Bridge link-app-store → \(endpointURL.absoluteString)")
+        QuickPreviewDebugLog.log("link-app-store bridgeAPIBaseURL \(AppEdition.current.bridgeAPIBaseURL?.absoluteString ?? "(nil)")")
 
         let (data, response) = try await dataForBridgeRequest(request, endpointURL: endpointURL)
         try validateHTTPResponse(response, data: data)
 
-        QuickPreviewDebugLog.log("link-app-store \(data.count) bytes from \(endpointURL.host ?? "?")")
+        QuickPreviewDebugLog.log(
+            "link-app-store \(data.count) bytes from \(bridgeLogHost(endpointURL: endpointURL, response: response))"
+        )
         let decoded: AppStoreLinkResponse
         do {
             decoded = try decodeAppStoreLinkResponse(from: data)
+        } catch let error as ProEntitlementBridgeError {
+            if case .missingSecureDownloadLink = error {
+                bridgeLogger.error("link-app-store missing or invalid downloadURL")
+                logBridgeResponseBody(data, context: "link-app-store")
+            }
+            QuickPreviewDebugLog.log("link-app-store bridge error: \(error)")
+            throw error
         } catch {
             bridgeLogger.error("link-app-store decode failed: \(String(describing: error), privacy: .public)")
             logBridgeResponseBody(data, context: "link-app-store")
             QuickPreviewDebugLog.log("link-app-store decode error: \(error)")
             throw ProEntitlementBridgeError.invalidResponse
         }
-        QuickPreviewDebugLog.log("link-app-store decoded status=\(decoded.status) email=\(decoded.email ?? "nil") expiresAt=\(String(describing: decoded.expiresAt))")
+        QuickPreviewDebugLog.log("link-app-store decoded status=\(decoded.status) email=\(decoded.email ?? "nil") expiresAt=\(String(describing: decoded.expiresAt)) downloadURL=\(decoded.downloadURL.absoluteString)")
 
-        if AppEdition.current == .appStore, let proDownloadURL = makeProDownloadURL(from: decoded) {
-            NSWorkspace.shared.open(proDownloadURL)
+        if AppEdition.current == .appStore {
+            NSWorkspace.shared.open(decoded.downloadURL)
         }
 
         return decoded
@@ -300,7 +386,7 @@ final class ProEntitlementBridge {
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(requestBody)
+        request.httpBody = try BridgeAPIJSON.requestJSONEncoder().encode(requestBody)
 
         bridgeLogger.info("POST validate-pro host=\(endpointURL.host ?? "?", privacy: .public) url=\(endpointURL.absoluteString, privacy: .public)")
         print("[QuickPreview] Bridge validate-pro → \(endpointURL.absoluteString)")
@@ -308,7 +394,9 @@ final class ProEntitlementBridge {
         let (data, response) = try await dataForBridgeRequest(request, endpointURL: endpointURL)
         try validateHTTPResponse(response, data: data)
 
-        QuickPreviewDebugLog.log("validate-pro \(data.count) bytes from \(endpointURL.host ?? "?")")
+        QuickPreviewDebugLog.log(
+            "validate-pro \(data.count) bytes from \(bridgeLogHost(endpointURL: endpointURL, response: response))"
+        )
         let snapshot: ProEntitlementSnapshot
         do {
             snapshot = try decodeProEntitlementSnapshot(from: data)
@@ -344,18 +432,6 @@ final class ProEntitlementBridge {
             QuickPreviewDebugLog.log("Bridge request FAILED \(endpointURL.absoluteString) — \(error)")
             throw ProEntitlementBridgeError.bridgeRequestFailed(url: endpointURL, underlying: error)
         }
-    }
-
-    private func makeProDownloadURL(from response: AppStoreLinkResponse) -> URL? {
-        guard var components = URLComponents(url: AppEdition.current.proDownloadURL ?? URL(fileURLWithPath: "/"), resolvingAgainstBaseURL: false) else {
-            return nil
-        }
-
-        components.queryItems = [
-            URLQueryItem(name: "token", value: response.proAccessToken),
-            URLQueryItem(name: "email", value: response.email)
-        ]
-        return components.url
     }
 
     private func entitlementStateName(for state: SubscriptionAccessState) -> String {

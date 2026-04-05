@@ -69,10 +69,6 @@ enum AppEdition: String {
         }
     }
 
-    var proDownloadURL: URL? {
-        URL(string: "https://quickpreview.boive.se/pro/download/")
-    }
-
     var supportURL: URL? {
         URL(string: "https://quickpreview.boive.se/support/")
     }
@@ -80,6 +76,6 @@ enum AppEdition: String {
     /// Hosts only `/api/bridge/*` (Vercel). Marketing HTML stays on `quickpreview.boive.se`.
     /// Match **Vercel → Project → Domains** (prefer the stable `*.vercel.app` without a deployment hash when listed).
     var bridgeAPIBaseURL: URL? {
-        URL(string: "https://quick-preview-iaidg1nz5-joacim-boives-projects.vercel.app/api/bridge/")
+        URL(string: "https://quick-preview-alpha.vercel.app/api/bridge/")
     }
 }

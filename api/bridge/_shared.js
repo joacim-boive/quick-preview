@@ -74,7 +74,10 @@ function siteBaseURL() {
   return "https://quickpreview.boive.se";
 }
 
-/** Public origin for bridge pages (ticket exchange, download UI). Prefer explicit Vercel URL when the marketing site is elsewhere. */
+/**
+ * Public origin for ticketed bridge URLs (`/api/bridge/pro-download`). Must be a host that actually runs these
+ * serverless routes — never the static marketing site (e.g. boive.se), or ticket links 404 and clients may fall back to unsafe patterns.
+ */
 function bridgePublicBaseURL() {
   const explicit = process.env.QUICKPREVIEW_BRIDGE_PUBLIC_URL;
   if (explicit && String(explicit).trim()) {
@@ -85,7 +88,9 @@ function bridgePublicBaseURL() {
     const host = String(vercel).replace(/^https?:\/\//i, "");
     return `https://${host}`;
   }
-  return siteBaseURL();
+  throw new Error(
+    "Set QUICKPREVIEW_BRIDGE_PUBLIC_URL on Vercel (e.g. https://quick-preview-alpha.vercel.app). VERCEL_URL was missing and marketing siteBaseURL() must not be used for bridge tickets."
+  );
 }
 
 function parseCookieHeader(header) {
@@ -144,6 +149,24 @@ function entitlementStatusFromState(entitlementState) {
 function normalizeExpirationDate(expirationDate) {
   if (!expirationDate) {
     return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  }
+
+  if (typeof expirationDate === "number" && Number.isFinite(expirationDate)) {
+    // Older clients may send numeric timestamps. Accept:
+    // - milliseconds since Unix epoch
+    // - seconds since Unix epoch
+    // - seconds since Apple's 2001 reference date
+    const candidates = [
+      new Date(expirationDate),
+      new Date(expirationDate * 1000),
+      new Date((expirationDate + 978307200) * 1000),
+    ];
+    const parsedCandidate = candidates.find(
+      (candidate) => !Number.isNaN(candidate.getTime()) && candidate.getTime() > Date.now()
+    );
+    if (parsedCandidate) {
+      return parsedCandidate;
+    }
   }
 
   const parsed = new Date(expirationDate);
