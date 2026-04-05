@@ -1,4 +1,6 @@
+const path = require("node:path");
 const { Readable } = require("node:stream");
+const { get } = require("@vercel/blob");
 
 const {
   bridgePublicBaseURL,
@@ -10,7 +12,7 @@ const {
 
 const COOKIE_NAME = "QuickPreviewProDl";
 const COOKIE_MAX_AGE_SEC = 600;
-const DOWNLOAD_FILENAME = "QuickPreviewPro.zip";
+const DOWNLOAD_FILENAME = "QuickPreviewPro.dmg";
 
 function cookieAttributes(selfPath, maxAgeSec) {
   const secure =
@@ -18,36 +20,55 @@ function cookieAttributes(selfPath, maxAgeSec) {
   return `Path=${selfPath}; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`;
 }
 
-function downloadSourceURL() {
-  return new URL(`/downloads/${DOWNLOAD_FILENAME}`, `${siteBaseURL()}/`).toString();
+function blobPathname() {
+  const value = process.env.QUICKPREVIEW_PRO_BLOB_PATHNAME;
+  if (!value || !String(value).trim()) {
+    throw new Error(
+      "Set QUICKPREVIEW_PRO_BLOB_PATHNAME to the private Vercel Blob pathname for QuickPreview PRO."
+    );
+  }
+  return String(value).trim().replace(/^\/+/, "");
+}
+
+function downloadFilename() {
+  const pathname = blobPathname();
+  return path.posix.basename(pathname) || DOWNLOAD_FILENAME;
 }
 
 async function proxyDownload(res, selfPath) {
-  const upstream = await fetch(downloadSourceURL(), { redirect: "follow" });
-  if (!upstream.ok || !upstream.body) {
+  let upstream;
+  try {
+    upstream = await get(blobPathname(), { access: "private" });
+  } catch (error) {
     throw new Error(
-      `Could not fetch ${DOWNLOAD_FILENAME} from the static site (HTTP ${upstream.status}).`
+      error instanceof Error
+        ? `Could not fetch ${downloadFilename()} from private Vercel Blob: ${error.message}`
+        : `Could not fetch ${downloadFilename()} from private Vercel Blob.`
     );
+  }
+
+  if (!upstream?.stream) {
+    throw new Error(`Private Vercel Blob did not return a readable stream for ${downloadFilename()}.`);
   }
 
   res.statusCode = 200;
   res.setHeader(
     "Content-Type",
-    upstream.headers.get("content-type") || "application/zip"
+    upstream.contentType || "application/zip"
   );
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${DOWNLOAD_FILENAME}"`
+    `attachment; filename="${downloadFilename()}"`
   );
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Cache-Control", "no-store, private");
   res.setHeader("Set-Cookie", `${COOKIE_NAME}=; ${cookieAttributes(selfPath, 0)}`);
 
-  const contentLength = upstream.headers.get("content-length");
-  if (contentLength) {
-    res.setHeader("Content-Length", contentLength);
+  if (typeof upstream.size === "number" && upstream.size > 0) {
+    res.setHeader("Content-Length", String(upstream.size));
   }
 
-  Readable.fromWeb(upstream.body).pipe(res);
+  Readable.fromWeb(upstream.stream).pipe(res);
 }
 
 module.exports = async function handler(req, res) {

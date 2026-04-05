@@ -30,7 +30,7 @@ Commands:
   pro               Build the direct-distribution Pro configuration.
   archive-appstore  Create a Release archive for App Store submission.
   archive-pro       Create a Pro archive for direct-distribution validation.
-  package-pro       Build Pro and zip the app for website delivery.
+  package-pro       Build Pro, sign it for direct distribution, create a DMG, notarize it, and staple it.
   show-settings     Print the Xcode settings for a configuration.
   menu              Open the interactive build menu.
   clean             Remove the local build output folder.
@@ -101,6 +101,115 @@ app_path_for_configuration() {
   printf '%s\n' "$(derived_data_path_for_configuration "${configuration}")/Build/Products/${configuration}/${app_name}"
 }
 
+pro_helper_app_path() {
+  local app_path="$1"
+  printf '%s\n' "${app_path}/Contents/Library/LoginItems/QuickPreviewLauncher.app"
+}
+
+require_env_value() {
+  local name="$1"
+  local description="$2"
+  if [[ -z "${!name:-}" ]]; then
+    echo "Missing ${name}. ${description}" >&2
+    exit 1
+  fi
+}
+
+collect_notary_auth_args() {
+  NOTARY_AUTH_ARGS=()
+
+  if [[ -n "${QUICKPREVIEW_NOTARY_PROFILE:-}" ]]; then
+    NOTARY_AUTH_ARGS=(--keychain-profile "${QUICKPREVIEW_NOTARY_PROFILE}")
+    return 0
+  fi
+
+  if [[ -n "${QUICKPREVIEW_NOTARY_KEY:-}" && -n "${QUICKPREVIEW_NOTARY_KEY_ID:-}" ]]; then
+    NOTARY_AUTH_ARGS=(--key "${QUICKPREVIEW_NOTARY_KEY}" --key-id "${QUICKPREVIEW_NOTARY_KEY_ID}")
+    if [[ -n "${QUICKPREVIEW_NOTARY_ISSUER:-}" ]]; then
+      NOTARY_AUTH_ARGS+=(--issuer "${QUICKPREVIEW_NOTARY_ISSUER}")
+    fi
+    return 0
+  fi
+
+  if [[ -n "${QUICKPREVIEW_NOTARY_APPLE_ID:-}" && -n "${QUICKPREVIEW_NOTARY_TEAM_ID:-}" ]]; then
+    NOTARY_AUTH_ARGS=(--apple-id "${QUICKPREVIEW_NOTARY_APPLE_ID}" --team-id "${QUICKPREVIEW_NOTARY_TEAM_ID}")
+    if [[ -n "${QUICKPREVIEW_NOTARY_PASSWORD:-}" ]]; then
+      NOTARY_AUTH_ARGS+=(--password "${QUICKPREVIEW_NOTARY_PASSWORD}")
+    fi
+    return 0
+  fi
+
+  echo "Missing notarization credentials. Set QUICKPREVIEW_NOTARY_PROFILE, or App Store Connect API key env vars, or QUICKPREVIEW_NOTARY_APPLE_ID/TEAM_ID/PASSWORD." >&2
+  exit 1
+}
+
+sign_direct_distribution_pro_app() {
+  local app_path="$1"
+  local identity="$2"
+  local helper_path
+  helper_path="$(pro_helper_app_path "${app_path}")"
+
+  if [[ ! -d "${helper_path}" ]]; then
+    echo "Expected helper app not found at ${helper_path}" >&2
+    exit 1
+  fi
+
+  echo "Signing helper app with Developer ID..."
+  codesign \
+    --force \
+    --sign "${identity}" \
+    --options runtime \
+    --timestamp \
+    --entitlements "${REPO_ROOT}/Sources/Resources/QuickPreviewProLauncher.entitlements" \
+    "${helper_path}"
+
+  echo "Signing main app with Developer ID..."
+  codesign \
+    --force \
+    --sign "${identity}" \
+    --options runtime \
+    --timestamp \
+    --entitlements "${REPO_ROOT}/Sources/Resources/QuickPreviewPro.entitlements" \
+    "${app_path}"
+
+  echo "Verifying code signatures..."
+  codesign --verify --strict --verbose=2 "${helper_path}"
+  codesign --verify --strict --verbose=2 "${app_path}"
+}
+
+create_pro_distribution_dmg() {
+  local app_path="$1"
+  local dmg_path="$2"
+  local dmg_root="${PACKAGES_DIR}/QuickPreviewPro-dmg-root"
+
+  rm -rf "${dmg_root}"
+  mkdir -p "${dmg_root}"
+  cp -R "${app_path}" "${dmg_root}/"
+  ln -s /Applications "${dmg_root}/Applications"
+
+  rm -f "${dmg_path}"
+
+  echo "Creating DMG..."
+  hdiutil create \
+    -volname "QuickPreview Pro" \
+    -srcfolder "${dmg_root}" \
+    -ov \
+    -format UDZO \
+    "${dmg_path}"
+}
+
+notarize_and_staple_artifact() {
+  local artifact_path="$1"
+
+  collect_notary_auth_args
+
+  echo "Submitting ${artifact_path} for notarization..."
+  xcrun notarytool submit "${artifact_path}" "${NOTARY_AUTH_ARGS[@]}" --wait
+
+  echo "Stapling notarization ticket..."
+  xcrun stapler staple "${artifact_path}"
+}
+
 build_configuration() {
   local configuration="$1"
   ensure_directories
@@ -160,18 +269,21 @@ package_pro() {
 
   local app_path
   app_path="$(app_path_for_configuration "Pro")"
-  local zip_path="${PACKAGES_DIR}/QuickPreviewPro.zip"
+  local dmg_path="${PACKAGES_DIR}/QuickPreviewPro.dmg"
 
   if [[ ! -d "${app_path}" ]]; then
     echo "Expected app not found at ${app_path}" >&2
     exit 1
   fi
 
-  rm -f "${zip_path}"
+  require_env_value "QUICKPREVIEW_DEVELOPER_ID_APP" "Set it to your Developer ID Application certificate name, e.g. Developer ID Application: Your Name (TEAMID)."
 
-  echo "Packaging ${app_path}..."
-  ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${zip_path}"
-  echo "Created package: ${zip_path}"
+  echo "Packaging ${app_path} for direct distribution..."
+  sign_direct_distribution_pro_app "${app_path}" "${QUICKPREVIEW_DEVELOPER_ID_APP}"
+  create_pro_distribution_dmg "${app_path}" "${dmg_path}"
+  notarize_and_staple_artifact "${dmg_path}"
+
+  echo "Created notarized DMG: ${dmg_path}"
 }
 
 show_settings() {
@@ -201,7 +313,7 @@ QuickPreview Build Menu
   3) Build PRO
   4) Archive App Store submission build
   5) Archive PRO build
-  6) Package PRO zip for website delivery
+  6) Package PRO notarized DMG for website delivery
   7) Show App Store build settings
   8) Show PRO build settings
   9) Clean local build output

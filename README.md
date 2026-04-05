@@ -66,8 +66,16 @@ After fixing settings, run **Redeploy** on the latest commit.
 1. [Create a project](https://vercel.com/new) from this Git repo (or run `vercel link` locally after `vercel login`).
 2. In **Project → Settings → Environment Variables**, add for **Production** (and **Preview** if you test linking on preview URLs):
    - **`QUICKPREVIEW_BRIDGE_SECRET`** — long random string (server-only; signs link codes and PRO tokens).
-   - **`QUICKPREVIEW_SITE_URL`** — keep **`https://quickpreview.boive.se`** if that is where you host the static `site/` files. The API uses this for absolute **download** and portal links in JSON, **not** as the API hostname.
-   - **`QUICKPREVIEW_ALLOWED_ORIGINS`** — `https://quickpreview.boive.se` (comma-separated if you add more) so the browser can **POST** `create-link-code` from your static portal to Vercel (**CORS**). Do **not** point `QUICKPREVIEW_SITE_URL` at the `*.vercel.app` URL unless you want returned links to go there too.
+   - **`QUICKPREVIEW_SITE_URL`** — keep **`https://quickpreview.boive.se`** if that is where you host the static `site/` files. The API uses this for portal/support links, not as the protected download host.
+   - **`QUICKPREVIEW_BRIDGE_PUBLIC_URL`** — your stable Vercel production origin, e.g. **`https://quick-preview-alpha.vercel.app`**, so the App Store app receives ticketed bridge URLs on the correct host.
+   - **`QUICKPREVIEW_PRO_BLOB_PATHNAME`** — pathname of the **private Vercel Blob** that stores the notarized PRO DMG, e.g. **`downloads/QuickPreviewPro.dmg`**. The file is streamed only through **`/api/bridge/pro-download`** after ticket verification.
+   - **`BLOB_READ_WRITE_TOKEN`** — Vercel Blob server token for the same project/environment.
+   - **`QUICKPREVIEW_ALLOWED_ORIGINS`** — `https://quickpreview.boive.se` (comma-separated if you add more) so the browser can **POST** `create-link-code` from your static portal to Vercel (**CORS**).
+   - **`QUICKPREVIEW_DEVELOPER_ID_APP`** — your **Developer ID Application** signing identity for direct distribution.
+   - **Notarization credentials for `./Scripts/build.sh package-pro`** — either:
+     - **`QUICKPREVIEW_NOTARY_PROFILE`** — keychain profile created with `xcrun notarytool store-credentials`
+     - or **`QUICKPREVIEW_NOTARY_KEY`**, **`QUICKPREVIEW_NOTARY_KEY_ID`**, **`QUICKPREVIEW_NOTARY_ISSUER`**
+     - or **`QUICKPREVIEW_NOTARY_APPLE_ID`**, **`QUICKPREVIEW_NOTARY_TEAM_ID`**, **`QUICKPREVIEW_NOTARY_PASSWORD`**
 3. **Split hosting:** If the marketing site lives on `quickpreview.boive.se` and only **Vercel** runs **`/api/bridge/*`**, set **`bridgeAPIBaseURL`** in `AppEdition.swift` and the **`qp-bridge-api-origin`** meta tags on `site/pro/*.html` to your Vercel **Production** URL (see **Project → Domains**). Re-upload static files to `boive.se` after changing the meta tags.
 
 ### Same-origin note
@@ -97,6 +105,8 @@ vercel login
 vercel link
 vercel env add QUICKPREVIEW_BRIDGE_SECRET production
 vercel env add QUICKPREVIEW_SITE_URL production
+vercel env add QUICKPREVIEW_BRIDGE_PUBLIC_URL production
+vercel env add QUICKPREVIEW_PRO_BLOB_PATHNAME production
 vercel deploy --prod
 ```
 
@@ -113,7 +123,7 @@ The background shortcut is still optional in both editions. In the App Store edi
 3. Use `./Scripts/build.sh` for the guided build menu.
 4. Use **`Debug`** when you need **QuickPreview PRO** (direct build, `quickpreview-pro://`, bundle `com.jboive.quickpreview.pro`). The default **QuickPreview** scheme runs this configuration.
 5. Use **`Release`** for the **Mac App Store** app (`quickpreview://`, bundle `com.jboive.quickpreview`). Use the **QuickPreview App Store** shared scheme to **Run** this from Xcode with the debugger.
-6. Use **`Pro`** (configuration) when you need an optimized direct-distribution PRO build via `./Scripts/build.sh` or the Xcode **Pro** configuration.
+6. Use **`Pro`** (configuration) when you need an optimized direct-distribution PRO build. For a website-ready direct download, use **`./Scripts/build.sh package-pro`** to build, Developer ID sign, DMG, notarize, and staple the PRO app.
 7. **Subscriber portal / `quickpreview://account-link`:** The website opens **`quickpreview://`**, which macOS delivers to whichever **QuickPreview** (App Store edition) owns that scheme—almost always the copy in **`/Applications`** from the App Store, **not** the **QuickPreview Pro** app from **`./Scripts/build.sh debug`**. To test linking against **your** build: run **`./Scripts/build.sh run-appstore`** (builds **Release** and opens **QuickPreview.app**), or use the **QuickPreview App Store** Xcode scheme—then quit or temporarily move the store-installed QuickPreview so the URL opens this build.
 8. **Help → Open Debug Log…** appends bridge/deep-link diagnostics to **`~/Library/Application Support/QuickPreview/debug.log`** (same folder is revealed by **Show Debug Log in Finder**).
 
@@ -140,6 +150,7 @@ Notes:
 
 - `archive-appstore` now writes the archive into Xcode's standard archives folder so it appears in Organizer.
 - `archive-pro` stays in the repo-local `build/archives/` folder because it is for direct-distribution validation, not App Store submission.
+- `package-pro` now produces **`build/packages/QuickPreviewPro.dmg`** and requires Developer ID + notarization credentials in the environment.
 
 ## Important Environment Requirement
 

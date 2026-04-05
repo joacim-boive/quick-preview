@@ -6,3 +6,6 @@ QuickPreview.xcodeproj/project.xcworkspace/xcuserdata/
 .history
 public/
 .vercel/output
+.vercel
+.env*.local
+node_modules
