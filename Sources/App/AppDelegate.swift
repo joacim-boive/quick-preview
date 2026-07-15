@@ -1439,25 +1439,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func showPrimaryWindow() {
-        if subscriptionController.accessState.isEntitled {
-            revealPlayerWindow(centerIfNeeded: false)
-            return
-        }
-
-        switch subscriptionController.accessState {
-        case .unknown, .verifying:
-            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
-                self?.revealPlayerWindow(centerIfNeeded: false)
-            }
-        case .expired, .revoked, .refunded, .notEntitled:
-            presentBlockedPaywall(for: subscriptionController.accessState)
-            refreshAccessStateInBackground()
-        case .trialActive,
-             .subscriptionActive,
-             .inGracePeriod,
-             .inBillingRetry,
-             .offlineGracePeriod:
-            revealPlayerWindow(centerIfNeeded: false)
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            guard let self else { return }
+            _ = self.restoreLastOpenedVideoIfPossible()
+            self.revealPlayerWindow(centerIfNeeded: false)
         }
     }
 
