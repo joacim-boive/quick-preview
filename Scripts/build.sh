@@ -53,6 +53,18 @@ ensure_project() {
   fi
 }
 
+load_env_local() {
+  local env_file="${REPO_ROOT}/.env.local"
+  if [[ ! -f "${env_file}" ]]; then
+    return 0
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  source "${env_file}"
+  set +a
+}
+
 ensure_directories() {
   mkdir -p "${PRODUCTS_DIR}" "${ARCHIVES_DIR}" "${PACKAGES_DIR}"
 }
@@ -367,6 +379,7 @@ EOF
 
 main() {
   ensure_project
+  load_env_local
 
   local command="${1:-menu}"
 

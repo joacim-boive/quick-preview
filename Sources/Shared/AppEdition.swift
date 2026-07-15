@@ -77,7 +77,7 @@ enum AppEdition: String {
     }
 
     var privacyPolicyURL: URL? {
-        URL(string: "https://quick-preview-alpha.vercel.app/privacy/")
+        URL(string: "https://quickpreview.boive.se/privacy/")
     }
 
     var termsOfUseURL: URL? {

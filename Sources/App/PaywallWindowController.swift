@@ -34,8 +34,8 @@ final class PaywallWindowController: NSWindowController {
         wrappingLabelWithString: "Payment is handled by Apple. The subscription renews automatically unless canceled at least 24 hours before the current period ends."
     )
     private let legalLinksRow = NSStackView()
-    private let privacyPolicyButton = NSButton(title: "Privacy Policy", target: nil, action: nil)
-    private let termsOfUseButton = NSButton(title: "Terms of Use", target: nil, action: nil)
+    private let privacyPolicyButton = makeLegalLinkButton(title: "Privacy Policy")
+    private let termsOfUseButton = makeLegalLinkButton(title: "Terms of Use")
     private let progressIndicator = NSProgressIndicator()
     private let subscribeButton = NSButton(title: "", target: nil, action: nil)
     private let secondaryActionsContainer = NSView()
@@ -50,7 +50,7 @@ final class PaywallWindowController: NSWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 548),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 600),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -226,27 +226,11 @@ final class PaywallWindowController: NSWindowController {
         trustLabel.textColor = .secondaryLabelColor
         trustLabel.maximumNumberOfLines = 0
 
-        [privacyPolicyButton, termsOfUseButton].forEach { button in
-            button.target = self
-            button.isBordered = false
-            button.font = .systemFont(ofSize: 12, weight: .medium)
-            button.contentTintColor = .linkColor
-            button.translatesAutoresizingMaskIntoConstraints = false
-        }
-        privacyPolicyButton.action = #selector(handlePrivacyPolicy(_:))
-        termsOfUseButton.action = #selector(handleTermsOfUse(_:))
-
-        legalLinksRow.translatesAutoresizingMaskIntoConstraints = false
-        legalLinksRow.orientation = .horizontal
-        legalLinksRow.alignment = .centerY
-        legalLinksRow.spacing = 12
-        legalLinksRow.addArrangedSubview(privacyPolicyButton)
-        legalLinksRow.addArrangedSubview(termsOfUseButton)
-
         planCard.addSubview(planNameLabel)
         planCard.addSubview(planSubtitleLabel)
         planCard.addSubview(priceLabel)
         planCard.addSubview(trustLabel)
+        configureLegalLinks()
         planCard.addSubview(legalLinksRow)
 
         NSLayoutConstraint.activate([
@@ -265,10 +249,46 @@ final class PaywallWindowController: NSWindowController {
             trustLabel.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 16),
             trustLabel.trailingAnchor.constraint(equalTo: planCard.trailingAnchor, constant: -16),
 
-            legalLinksRow.topAnchor.constraint(equalTo: trustLabel.bottomAnchor, constant: 8),
-            legalLinksRow.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 12),
-            legalLinksRow.bottomAnchor.constraint(equalTo: planCard.bottomAnchor, constant: -12)
+            legalLinksRow.topAnchor.constraint(equalTo: trustLabel.bottomAnchor, constant: 10),
+            legalLinksRow.centerXAnchor.constraint(equalTo: planCard.centerXAnchor),
+            legalLinksRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 22),
+            legalLinksRow.bottomAnchor.constraint(equalTo: planCard.bottomAnchor, constant: -14)
         ])
+    }
+
+    private static func makeLegalLinkButton(title: String) -> NSButton {
+        let button = NSButton(title: "", target: nil, action: nil)
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue
+            ]
+        )
+        button.setButtonType(.momentaryChange)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return button
+    }
+
+    private func configureLegalLinks() {
+        [privacyPolicyButton, termsOfUseButton].forEach { button in
+            button.target = self
+        }
+        privacyPolicyButton.action = #selector(handlePrivacyPolicy(_:))
+        termsOfUseButton.action = #selector(handleTermsOfUse(_:))
+
+        legalLinksRow.translatesAutoresizingMaskIntoConstraints = false
+        legalLinksRow.orientation = .horizontal
+        legalLinksRow.alignment = .centerY
+        legalLinksRow.spacing = 18
+        legalLinksRow.setContentHuggingPriority(.required, for: .vertical)
+        legalLinksRow.setContentCompressionResistancePriority(.required, for: .vertical)
+        legalLinksRow.addArrangedSubview(privacyPolicyButton)
+        legalLinksRow.addArrangedSubview(termsOfUseButton)
     }
 
     private func configureSecondaryButtons() {
@@ -317,7 +337,7 @@ final class PaywallWindowController: NSWindowController {
             subscribeButton.isHidden = true
             secondaryButtonRow.isHidden = true
             secondaryActionsContainer.isHidden = true
-            legalLinksRow.isHidden = true
+            legalLinksRow.isHidden = AppEdition.current == .pro
             progressIndicator.isHidden = false
             progressIndicator.startAnimation(nil)
         case .blocked(let accessState, let productDetails):
