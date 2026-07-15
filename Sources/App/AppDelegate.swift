@@ -99,14 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            if let paywallWindowController, paywallWindowController.window?.isVisible == true {
-                paywallWindowController.showWindow(nil)
-                paywallWindowController.window?.makeKeyAndOrderFront(nil)
-            } else {
-                requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
-                    self?.revealPlayerWindow(centerIfNeeded: false)
-                }
-            }
+            showPrimaryWindow()
         }
         return true
     }
@@ -151,6 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.ensureWindowController().presentOpenVideoPanel()
         }
         _ = sender
+    }
+
+    @objc
+    private func handleShowPrimaryWindow(_ sender: Any?) {
+        _ = sender
+        showPrimaryWindow()
     }
 
     @objc
@@ -362,7 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return true
         case accountPortalMenuItemTag:
             menuItem.title = AppEdition.current == .appStore
-                ? "Account & QuickPreview PRO..."
+                ? "Subscriber Account..."
                 : "Manage QuickPreview PRO Access..."
             return true
         default:
@@ -547,7 +546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         backgroundShortcutItem.tag = backgroundShortcutMenuItemTag
         appMenu.addItem(backgroundShortcutItem)
         let accountPortalItem = NSMenuItem(
-            title: AppEdition.current == .appStore ? "Account & QuickPreview PRO..." : "Manage QuickPreview PRO Access...",
+            title: AppEdition.current == .appStore ? "Subscriber Account..." : "Manage QuickPreview PRO Access...",
             action: #selector(handleAccountPortalFromMenu(_:)),
             keyEquivalent: ""
         )
@@ -679,6 +678,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         paranoidModeItem.tag = paranoidModeMenuItemTag
         playbackMenu.addItem(paranoidModeItem)
         playbackMenuItem.submenu = playbackMenu
+
+        let windowMenuItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        mainMenu.addItem(windowMenuItem)
+
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(
+            withTitle: "Minimize",
+            action: #selector(NSWindow.performMiniaturize(_:)),
+            keyEquivalent: "m"
+        )
+        windowMenu.addItem(
+            withTitle: "Zoom",
+            action: #selector(NSWindow.performZoom(_:)),
+            keyEquivalent: ""
+        )
+        windowMenu.addItem(.separator())
+        let showPrimaryWindowItem = NSMenuItem(
+            title: "Show QuickPreview",
+            action: #selector(handleShowPrimaryWindow(_:)),
+            keyEquivalent: "0"
+        )
+        showPrimaryWindowItem.target = self
+        windowMenu.addItem(showPrimaryWindowItem)
+        windowMenuItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
 
         let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         mainMenu.addItem(helpMenuItem)
@@ -1287,6 +1311,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.onShowHelp = { [weak self] in
             self?.handleShowGuide(nil)
         }
+        controller.onOpenPrivacyPolicy = {
+            guard let url = AppEdition.current.privacyPolicyURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        controller.onOpenTermsOfUse = {
+            guard let url = AppEdition.current.termsOfUseURL else { return }
+            NSWorkspace.shared.open(url)
+        }
         controller.onQuit = {
             NSApp.terminate(nil)
         }
@@ -1404,6 +1436,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.window?.makeKeyAndOrderFront(nil)
         controller.window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showPrimaryWindow() {
+        if subscriptionController.accessState.isEntitled {
+            revealPlayerWindow(centerIfNeeded: false)
+            return
+        }
+
+        switch subscriptionController.accessState {
+        case .unknown, .verifying:
+            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+                self?.revealPlayerWindow(centerIfNeeded: false)
+            }
+        case .expired, .revoked, .refunded, .notEntitled:
+            presentBlockedPaywall(for: subscriptionController.accessState)
+            refreshAccessStateInBackground()
+        case .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            revealPlayerWindow(centerIfNeeded: false)
+        }
     }
 
     private func restoreBookmarksWindowIfNeeded() {

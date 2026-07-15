@@ -660,7 +660,8 @@ button {
   color: var(--muted);
 }
 
-.faq-card a {
+.faq-card a,
+.policy-card a {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-thickness: 2px;
@@ -668,7 +669,9 @@ button {
 }
 
 .faq-card a:hover,
-.faq-card a:focus-visible {
+.faq-card a:focus-visible,
+.policy-card a:hover,
+.policy-card a:focus-visible {
   color: #9eeeff;
 }
 

@@ -76,6 +76,14 @@ enum AppEdition: String {
         URL(string: "https://quickpreview.boive.se/support/")
     }
 
+    var privacyPolicyURL: URL? {
+        URL(string: "https://quick-preview-alpha.vercel.app/privacy/")
+    }
+
+    var termsOfUseURL: URL? {
+        URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")
+    }
+
     /// Hosts only `/api/bridge/*` (Vercel). Marketing HTML stays on `quickpreview.boive.se`.
     /// Match **Vercel → Project → Domains** (prefer the stable `*.vercel.app` without a deployment hash when listed).
     var bridgeAPIBaseURL: URL? {

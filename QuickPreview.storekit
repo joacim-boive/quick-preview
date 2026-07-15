@@ -41,7 +41,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.jboive.quickpreview.subscription.monthly",
+          "productID" : "com.jboive.quickpreview.subscription.monthly.v2",
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "QuickPreview Monthly",
           "subscriptionGroupID" : "A1C43F8B",
