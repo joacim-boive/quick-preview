@@ -1225,7 +1225,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func handleSubscriptionAccessStateChange(_ state: SubscriptionAccessState) {
         if AppEdition.current == .pro {
-            dismissPaywallWindowIfNeeded()
             switch state {
             case .trialActive,
                  .subscriptionActive,
@@ -1238,6 +1237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case .expired, .revoked, .refunded, .notEntitled, .unknown, .verifying:
                 break
             }
+            dismissPaywallWindowIfNeeded()
 
             refreshFinderSelectionMonitoring()
             return
@@ -1253,7 +1253,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
              .inGracePeriod,
              .inBillingRetry,
              .offlineGracePeriod:
-            dismissPaywallWindowIfNeeded()
             let pendingAction = pendingPostEntitlementAction
             pendingPostEntitlementAction = nil
             if let pendingAction {
@@ -1261,6 +1260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             } else if !isMainWindowVisible {
                 revealPlayerWindow(centerIfNeeded: false)
             }
+            dismissPaywallWindowIfNeeded()
         case .expired, .revoked, .refunded, .notEntitled:
             hideEntitledWindows()
             presentBlockedPaywall(for: state)
@@ -1423,7 +1423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func dismissPaywallWindowIfNeeded() {
-        paywallWindowController?.close()
+        paywallWindowController?.window?.orderOut(nil)
     }
 
     private func revealPlayerWindow(centerIfNeeded: Bool) {

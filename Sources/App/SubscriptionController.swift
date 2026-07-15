@@ -44,6 +44,7 @@ final class SubscriptionController {
     private let proEntitlementBridge: ProEntitlementBridge?
     private let nowProvider: () -> Date
     private var updatesTask: Task<Void, Never>?
+    private var latestRefreshID: UInt64 = 0
 
     var onAccessStateChange: ((SubscriptionAccessState) -> Void)?
 
@@ -118,6 +119,8 @@ final class SubscriptionController {
     }
 
     func refreshEntitlements() async -> SubscriptionAccessState {
+        latestRefreshID &+= 1
+        let refreshID = latestRefreshID
         accessState = .verifying
         let cachedSnapshot = entitlementCache.load()
         let verifiedAt = nowProvider()
@@ -131,18 +134,31 @@ final class SubscriptionController {
 
         if AppEdition.current == .pro {
             let proState = await refreshProEntitlements(verifiedAt: verifiedAt)
+            guard refreshID == latestRefreshID else {
+                return accessState
+            }
+            persistVerifiedAccessStateIfNeeded(proState)
             accessState = proState
             return proState
         }
 
         do {
             let product = try await loadProduct()
+            guard refreshID == latestRefreshID else {
+                return accessState
+            }
             if let resolvedState = try await currentVerifiedAccessState(product: product, verifiedAt: verifiedAt) {
+                guard refreshID == latestRefreshID else {
+                    return accessState
+                }
                 persistVerifiedAccessStateIfNeeded(resolvedState)
                 accessState = resolvedState
                 return resolvedState
             }
         } catch {
+            guard refreshID == latestRefreshID else {
+                return accessState
+            }
             if let fallbackState = offlineFallbackState(from: cachedSnapshot, now: verifiedAt) {
                 accessState = fallbackState
                 return fallbackState
@@ -152,6 +168,9 @@ final class SubscriptionController {
             return .notEntitled
         }
 
+        guard refreshID == latestRefreshID else {
+            return accessState
+        }
         if let fallbackState = offlineFallbackState(from: cachedSnapshot, now: verifiedAt) {
             accessState = fallbackState
             return fallbackState
@@ -272,7 +291,6 @@ final class SubscriptionController {
 
     private func refreshProEntitlements(verifiedAt: Date) async -> SubscriptionAccessState {
         guard let proEntitlementBridge else {
-            entitlementCache.clear()
             return .notEntitled
         }
 
@@ -280,15 +298,12 @@ final class SubscriptionController {
 
         do {
             let entitlementSnapshot = try await proEntitlementBridge.refreshEntitlement(bundleIdentifier: bundleIdentifier)
-            let resolvedState = makeProAccessState(from: entitlementSnapshot, verifiedAt: verifiedAt)
-            persistVerifiedAccessStateIfNeeded(resolvedState)
-            return resolvedState
+            return makeProAccessState(from: entitlementSnapshot, verifiedAt: verifiedAt)
         } catch {
             if let fallbackState = offlineFallbackState(from: entitlementCache.load(), now: verifiedAt) {
                 return fallbackState
             }
 
-            entitlementCache.clear()
             return .notEntitled
         }
     }
@@ -448,6 +463,12 @@ final class SubscriptionController {
         let rollbackThreshold = now.addingTimeInterval(configuration.clockRollbackTolerance)
         guard rollbackThreshold >= snapshot.lastVerifiedAt else {
             return nil
+        }
+
+        if snapshot.grantKind == .trialActive || snapshot.grantKind == .subscriptionActive {
+            guard snapshot.expirationDate.map({ now <= $0 }) ?? true else {
+                return nil
+            }
         }
 
         let graceDeadline = snapshot.lastVerifiedAt.addingTimeInterval(configuration.offlineGraceWindow)
