@@ -1,0 +1,9 @@
+.history
+build
+public
+DerivedData
+QuickPreview.xcodeproj
+Sources
+Scripts
+*.xcodeproj
+*.xcworkspace

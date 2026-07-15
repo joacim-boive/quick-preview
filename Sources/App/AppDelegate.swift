@@ -1,20 +1,23 @@
+import Carbon
 import Cocoa
 import ServiceManagement
 import StoreKit
-import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let backgroundShortcutService = BackgroundShortcutService()
     private let bookmarkStore = BookmarkStore()
+    private let finderSelectionService = FinderSelectionService()
     private let thumbnailService = VideoThumbnailService()
     private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
-    private let subscriptionController = SubscriptionController()
+    private let proEntitlementBridge = ProEntitlementBridge()
+    private lazy var subscriptionController = SubscriptionController(
+        proEntitlementBridge: proEntitlementBridge
+    )
     private var windowController: MainPlayerWindowController?
     private var helpWindowController: HelpWindowController?
     private var bookmarksWindowController: BookmarksWindowController?
     private var paywallWindowController: PaywallWindowController?
-    private var finderSelectionMonitorTimer: DispatchSourceTimer?
     private var accessRefreshTask: Task<Void, Never>?
     private var suppressSubscriptionLoadingWindow = false
     private var latestSuppressingRefreshID = 0
@@ -22,13 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var shortcutHintText: String?
     private var didCenterMainWindowOnFirstPresentation = false
     private var appDidBecomeActiveObserver: NSObjectProtocol?
+    private var workspaceActivationObserver: NSObjectProtocol?
     private var protectedBookmarksSessionObserver: NSObjectProtocol?
-    private let finderSelectionMonitorQueue = DispatchQueue(
-        label: "quickpreview.finder-selection-monitor",
-        qos: .utility
-    )
-    private var isSelectionCheckInProgress = false
-    private var lastObservedFinderSelectedVideoURL: URL?
     private var ignoredFinderSelectedVideoURL: URL?
     private let loopMenuItemTag = 4101
     private let autoplayMenuItemTag = 4102
@@ -36,10 +34,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let protectedMediaMenuItemTag = 4300
     private let paranoidModeMenuItemTag = 4301
     private let backgroundShortcutMenuItemTag = 4302
+    private let accountPortalMenuItemTag = 4303
     private let allowedRotationDegrees = [0, 90, 180, 270]
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = notification
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        QuickPreviewDebugLog.appendSessionBanner()
         buildMainMenu()
         configureSubscriptionController()
         configureProtectedBookmarksSessionObserver()
@@ -49,7 +59,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         shortcutHintText = BackgroundShortcutConfiguration.windowTitleHint
-        startFinderSelectionMonitor()
+        if AppEdition.current.supportsFinderIntegration {
+            startFinderSelectionMonitor()
+        }
         requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
             self?.restoreLastOpenedVideoIfPossible()
             self?.revealPlayerWindow(centerIfNeeded: true)
@@ -60,16 +72,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        _ = app
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         accessRefreshTask?.cancel()
         bookmarksWindowController?.prepareForApplicationTermination()
         windowController?.closeCurrentVideoIfNeeded()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
-        finderSelectionMonitorTimer?.cancel()
-        finderSelectionMonitorTimer = nil
+        finderSelectionService.stop()
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+        }
+        if let workspaceActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
         }
         NotificationCenter.default.removeObserver(
             self,
@@ -80,21 +99,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            if let paywallWindowController, paywallWindowController.window?.isVisible == true {
-                paywallWindowController.showWindow(nil)
-                paywallWindowController.window?.makeKeyAndOrderFront(nil)
-            } else {
-                requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
-                    self?.revealPlayerWindow(centerIfNeeded: false)
-                }
-            }
+            showPrimaryWindow()
         }
         return true
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let first = urls.first else { return }
-        if first.scheme == "quickpreview" {
+        if first.scheme == "quickpreview" || first.scheme == AppEdition.current.urlScheme {
             openFromSchemeURL(first)
             return
         }
@@ -106,6 +118,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc
+    private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent _: NSAppleEventDescriptor) {
+        guard
+            let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+            let url = URL(string: urlString)
+        else {
+            return
+        }
+        QuickPreviewDebugLog.log(
+            """
+            Deep link received by bundlePath=\(Bundle.main.bundlePath)
+            bridgeAPIBaseURL=\(AppEdition.current.bridgeAPIBaseURL?.absoluteString ?? "(nil)")
+            url=\(url.absoluteString)
+            """
+        )
+        guard url.scheme == "quickpreview" || url.scheme == AppEdition.current.urlScheme else {
+            return
+        }
+        openFromSchemeURL(url)
+    }
+
+    @objc
     private func handleOpenFromMenu(_ sender: Any?) {
         requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
             self?.ensureWindowController().presentOpenVideoPanel()
@@ -114,12 +147,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc
+    private func handleShowPrimaryWindow(_ sender: Any?) {
+        _ = sender
+        showPrimaryWindow()
+    }
+
+    @objc
     private func handleOpenFinderSelectionFromMenu(_ sender: Any?) {
+        guard AppEdition.current.supportsFinderIntegration else {
+            beginAccountPortalFlow()
+            _ = sender
+            return
+        }
+        guard subscriptionController.accessState.isEntitled else {
+            presentFinderIntegrationRequiresProAlert()
+            _ = sender
+            return
+        }
         requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
             guard let self else { return }
             let controller = self.ensureWindowController()
             _ = controller.openFinderSelectionIfVideo(showErrors: true)
         }
+        _ = sender
+    }
+
+    @objc
+    private func handleAccountPortalFromMenu(_ sender: Any?) {
+        beginAccountPortalFlow()
         _ = sender
     }
 
@@ -289,16 +344,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 : "Enable Paranoid Mode..."
             return isEntitled && protectedBookmarksSessionController.isUnlocked
         case backgroundShortcutMenuItemTag:
-            switch backgroundShortcutService.status {
-            case .enabled:
-                menuItem.title = "Disable Background Shortcut"
-            case .requiresApproval:
-                menuItem.title = "Finish Enabling Background Shortcut..."
-            case .notRegistered, .notFound:
-                menuItem.title = "Enable Background Shortcut..."
-            @unknown default:
-                menuItem.title = "Background Shortcut..."
+            if let selectedShortcut = BackgroundShortcutConfiguration.selectedShortcut() {
+                switch backgroundShortcutService.status {
+                case .enabled:
+                    menuItem.title = "Background Shortcut (\(selectedShortcut.displayName))..."
+                case .requiresApproval:
+                    menuItem.title = "Finish Enabling Background Shortcut..."
+                case .notRegistered, .notFound:
+                    menuItem.title = "Set Background Shortcut..."
+                @unknown default:
+                    menuItem.title = "Background Shortcut..."
+                }
+            } else {
+                menuItem.title = "Set Background Shortcut..."
             }
+            return true
+        case accountPortalMenuItemTag:
+            menuItem.title = AppEdition.current == .appStore
+                ? "Subscriber Account..."
+                : "Manage QuickPreview PRO Access..."
             return true
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
@@ -328,6 +392,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
         case "shortcut":
             performGlobalShortcutAction()
+        case "account-link":
+            guard let linkCode = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+                showInfoAlert(
+                    title: "Account Link Failed",
+                    message: ProEntitlementBridgeError.invalidCallback.localizedDescription
+                )
+                return
+            }
+            let email = components.queryItems?.first(where: { $0.name == "email" })?.value
+            QuickPreviewDebugLog.log("Deep link account-link received (code \(linkCode.count) chars, email set: \(email != nil))")
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if AppEdition.current == .appStore {
+                    self.presentLoadingWindow()
+                }
+                _ = await self.subscriptionController.refreshEntitlements()
+                self.dismissPaywallWindowIfNeeded()
+                await self.handleAccountLinkCallback(linkCode: linkCode, email: email)
+            }
+        case "pro-session":
+            let token = components.queryItems?.first(where: { $0.name == "token" })?.value
+            let email = components.queryItems?.first(where: { $0.name == "email" })?.value
+            Task { @MainActor [weak self] in
+                await self?.handleProSessionCallback(token: token, email: email)
+            }
         default:
             return
         }
@@ -339,7 +428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let controller = MainPlayerWindowController(
             bookmarkStore: bookmarkStore,
-            thumbnailService: thumbnailService
+            thumbnailService: thumbnailService,
+            finderSelectionService: finderSelectionService
         )
         if let shortcutHintText {
             controller.setShortcutHint(shortcutHintText)
@@ -349,11 +439,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         controller.onCurrentVideoURLChange = { [weak self] videoURL in
             self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
+            self?.refreshFinderSelectionMonitoring()
         }
         controller.onBookmarkNavigationRequested = { [weak self] delta in
             self?.bookmarksWindowController?.navigateSelection(delta: delta)
         }
         windowController = controller
+        refreshFinderSelectionMonitoring()
         return controller
     }
 
@@ -403,22 +495,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc
+    private func handleOpenDebugLog(_ sender: Any?) {
+        _ = sender
+        QuickPreviewDebugLog.ensureLogFileExistsForUser()
+        NSWorkspace.shared.open(QuickPreviewDebugLog.logFileURL)
+        QuickPreviewDebugLog.log("Opened debug log from Help menu")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc
+    private func handleRevealDebugLogInFinder(_ sender: Any?) {
+        _ = sender
+        QuickPreviewDebugLog.ensureLogFileExistsForUser()
+        let url = QuickPreviewDebugLog.logFileURL
+        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc
     private func handleBackgroundShortcutMenuItem(_ sender: Any?) {
         _ = sender
-
-        switch backgroundShortcutService.status {
-        case .enabled:
-            disableBackgroundShortcut()
-        case .requiresApproval:
-            presentBackgroundShortcutApprovalPrompt(isStartupPrompt: false)
-        case .notRegistered, .notFound:
-            presentBackgroundShortcutEnablePrompt(isStartupPrompt: false)
-        @unknown default:
-            showInfoAlert(
-                title: "Background Shortcut Unavailable",
-                message: "QuickPreview could not determine the current background helper state."
-            )
-        }
+        presentBackgroundShortcutConfiguration()
     }
 
     private func showBookmarksWindow(selecting bookmark: Bookmark?, highlightSelection: Bool = false) {
@@ -448,6 +545,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         backgroundShortcutItem.target = self
         backgroundShortcutItem.tag = backgroundShortcutMenuItemTag
         appMenu.addItem(backgroundShortcutItem)
+        let accountPortalItem = NSMenuItem(
+            title: AppEdition.current == .appStore ? "Subscriber Account..." : "Manage QuickPreview PRO Access...",
+            action: #selector(handleAccountPortalFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        accountPortalItem.target = self
+        accountPortalItem.tag = accountPortalMenuItemTag
+        appMenu.addItem(accountPortalItem)
         appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit \(appName)",
@@ -468,14 +573,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         openItem.target = self
         fileMenu.addItem(openItem)
 
-        let openFinderSelectionItem = NSMenuItem(
-            title: "Open Finder Selection...",
-            action: #selector(handleOpenFinderSelectionFromMenu(_:)),
-            keyEquivalent: "o"
-        )
-        openFinderSelectionItem.target = self
-        openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
-        fileMenu.addItem(openFinderSelectionItem)
+        if AppEdition.current.supportsFinderIntegration {
+            let openFinderSelectionItem = NSMenuItem(
+                title: "Open Finder Selection...",
+                action: #selector(handleOpenFinderSelectionFromMenu(_:)),
+                keyEquivalent: "o"
+            )
+            openFinderSelectionItem.target = self
+            openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
+            fileMenu.addItem(openFinderSelectionItem)
+        }
         fileMenuItem.submenu = fileMenu
 
         let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
@@ -572,6 +679,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         playbackMenu.addItem(paranoidModeItem)
         playbackMenuItem.submenu = playbackMenu
 
+        let windowMenuItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        mainMenu.addItem(windowMenuItem)
+
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(
+            withTitle: "Minimize",
+            action: #selector(NSWindow.performMiniaturize(_:)),
+            keyEquivalent: "m"
+        )
+        windowMenu.addItem(
+            withTitle: "Zoom",
+            action: #selector(NSWindow.performZoom(_:)),
+            keyEquivalent: ""
+        )
+        windowMenu.addItem(.separator())
+        let showPrimaryWindowItem = NSMenuItem(
+            title: "Show QuickPreview",
+            action: #selector(handleShowPrimaryWindow(_:)),
+            keyEquivalent: "0"
+        )
+        showPrimaryWindowItem.target = self
+        windowMenu.addItem(showPrimaryWindowItem)
+        windowMenuItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
+
         let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
         mainMenu.addItem(helpMenuItem)
 
@@ -584,6 +716,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guideItem.target = self
         guideItem.keyEquivalentModifierMask = [.command, .shift]
         helpMenu.addItem(guideItem)
+        helpMenu.addItem(.separator())
+        let openDebugLogItem = NSMenuItem(
+            title: "Open Debug Log…",
+            action: #selector(handleOpenDebugLog(_:)),
+            keyEquivalent: ""
+        )
+        openDebugLogItem.target = self
+        helpMenu.addItem(openDebugLogItem)
+        let revealDebugLogItem = NSMenuItem(
+            title: "Show Debug Log in Finder",
+            action: #selector(handleRevealDebugLogInFinder(_:)),
+            keyEquivalent: ""
+        )
+        revealDebugLogItem.target = self
+        helpMenu.addItem(revealDebugLogItem)
         helpMenuItem.submenu = helpMenu
 
         NSApp.mainMenu = mainMenu
@@ -599,22 +746,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             )
         }
 
+        guard BackgroundShortcutConfiguration.selectedShortcut() != nil else {
+            return
+        }
+
         guard !backgroundShortcutService.hasShownStartupPrompt else {
             return
         }
 
         switch backgroundShortcutService.status {
-        case .enabled:
+        case .enabled, .notRegistered, .notFound:
             return
-        case .requiresApproval, .notRegistered, .notFound:
+        case .requiresApproval:
             backgroundShortcutService.markStartupPromptShown()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 guard let self else { return }
                 switch self.backgroundShortcutService.status {
                 case .requiresApproval:
                     self.presentBackgroundShortcutApprovalPrompt(isStartupPrompt: true)
-                case .notRegistered, .notFound:
-                    self.presentBackgroundShortcutEnablePrompt(isStartupPrompt: true)
                 default:
                     break
                 }
@@ -628,6 +777,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
             guard let self else { return }
             let controller = self.ensureWindowController()
+            guard AppEdition.current.supportsFinderIntegration else {
+                self.revealPlayerWindow(centerIfNeeded: false)
+                return
+            }
+            guard self.subscriptionController.accessState.isEntitled else {
+                self.revealPlayerWindow(centerIfNeeded: false)
+                return
+            }
             let openedFinderVideo = controller.openFinderSelectionIfVideo(showErrors: true)
             if !openedFinderVideo {
                 self.revealPlayerWindow(centerIfNeeded: false)
@@ -635,20 +792,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func presentBackgroundShortcutEnablePrompt(isStartupPrompt: Bool) {
+    private func presentBackgroundShortcutConfiguration() {
+        let currentShortcut = BackgroundShortcutConfiguration.selectedShortcut()
         let alert = NSAlert()
-        alert.messageText = "Enable Background Shortcut"
+        alert.messageText = "Background Shortcut"
         alert.informativeText = """
-        Allow QuickPreview to keep a tiny helper running in the background so \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space") can relaunch the player even when QuickPreview is closed.
+        QuickPreview will not reserve any global shortcut until you choose one here.
 
-        If macOS reserves Ctrl+Space, QuickPreview automatically falls back to \(BackgroundShortcutConfiguration.fallbackDescription).
+        Pick a shortcut that does not conflict with your editor or macOS, and QuickPreview will use it to reopen from the background after the main app is closed.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Enable")
-        alert.addButton(withTitle: isStartupPrompt ? "Not Now" : "Cancel")
+        alert.addButton(withTitle: "Save")
+        if currentShortcut != nil || backgroundShortcutService.status == .enabled || backgroundShortcutService.status == .requiresApproval {
+            alert.addButton(withTitle: "Turn Off")
+        }
+        alert.addButton(withTitle: "Cancel")
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            enableBackgroundShortcut()
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 52))
+        let label = NSTextField(labelWithString: "Shortcut")
+        label.frame = NSRect(x: 0, y: 30, width: 320, height: 16)
+
+        let popupButton = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28), pullsDown: false)
+        popupButton.addItem(withTitle: "Choose a shortcut...")
+        BackgroundShortcutConfiguration.availableShortcuts.forEach { shortcut in
+            popupButton.addItem(withTitle: shortcut.displayName)
+            popupButton.lastItem?.representedObject = shortcut.id as NSString
+        }
+        if let currentShortcut,
+           let index = BackgroundShortcutConfiguration.availableShortcuts.firstIndex(of: currentShortcut) {
+            popupButton.selectItem(at: index + 1)
+        } else {
+            popupButton.selectItem(at: 0)
+        }
+
+        accessoryView.addSubview(label)
+        accessoryView.addSubview(popupButton)
+        alert.accessoryView = accessoryView
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            guard
+                let selectedItem = popupButton.selectedItem,
+                let identifier = selectedItem.representedObject as? NSString,
+                let selectedShortcut = BackgroundShortcutConfiguration.availableShortcuts.first(where: { $0.id == String(identifier) })
+            else {
+                showInfoAlert(
+                    title: "Choose a Shortcut",
+                    message: "Pick a shortcut before enabling the background helper."
+                )
+                return
+            }
+            setBackgroundShortcut(selectedShortcut)
+            return
+        }
+
+        if response == .alertSecondButtonReturn,
+           currentShortcut != nil || backgroundShortcutService.status == .enabled || backgroundShortcutService.status == .requiresApproval {
+            disableBackgroundShortcut(clearSelection: true)
         }
     }
 
@@ -669,18 +869,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func enableBackgroundShortcut() {
+    private func setBackgroundShortcut(_ shortcut: HotkeyRegistration) {
+        guard GlobalHotkeyManager.canRegister(shortcut) else {
+            showInfoAlert(
+                title: "Shortcut Unavailable",
+                message: """
+                \(shortcut.displayName) is already reserved by macOS or another app.
+
+                Choose a different shortcut for QuickPreview.
+                """
+            )
+            return
+        }
+
+        BackgroundShortcutConfiguration.storeSelectedShortcut(shortcut)
+        updateShortcutHint()
+        backgroundShortcutService.resetStartupPrompt()
+
         do {
-            let status = try backgroundShortcutService.enable()
+            let status: SMAppService.Status
+            switch backgroundShortcutService.status {
+            case .enabled:
+                status = .enabled
+            case .requiresApproval:
+                status = .requiresApproval
+            case .notRegistered, .notFound:
+                status = try backgroundShortcutService.enable()
+            @unknown default:
+                status = backgroundShortcutService.status
+            }
+
             switch status {
             case .enabled:
-                try backgroundShortcutService.launchHelperIfNeeded()
+                try backgroundShortcutService.reloadHelperIfNeeded()
                 showInfoAlert(
-                    title: "Background Shortcut Enabled",
+                    title: "Background Shortcut Set",
                     message: """
-                    QuickPreview can now reopen from the background using \(BackgroundShortcutConfiguration.candidates.first?.displayName ?? "Ctrl+Space").
-
-                    If macOS keeps that shortcut reserved, QuickPreview falls back automatically.
+                    QuickPreview can now reopen from the background using \(shortcut.displayName).
                     """
                 )
             case .requiresApproval:
@@ -688,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case .notRegistered, .notFound:
                 showInfoAlert(
                     title: "Background Shortcut Pending",
-                    message: "QuickPreview asked macOS to register the background helper, but the helper is not active yet."
+                    message: "QuickPreview saved your shortcut, but the background helper is not active yet."
                 )
             @unknown default:
                 showInfoAlert(
@@ -704,12 +929,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func disableBackgroundShortcut() {
+    private func disableBackgroundShortcut(clearSelection: Bool) {
+        if clearSelection {
+            BackgroundShortcutConfiguration.storeSelectedShortcut(nil)
+            updateShortcutHint()
+        }
+
         do {
-            try backgroundShortcutService.disable()
+            switch backgroundShortcutService.status {
+            case .enabled, .requiresApproval:
+                try backgroundShortcutService.disable()
+            case .notRegistered, .notFound:
+                backgroundShortcutService.resetStartupPrompt()
+            @unknown default:
+                break
+            }
             showInfoAlert(
                 title: "Background Shortcut Disabled",
-                message: "QuickPreview will no longer keep its helper running in the background after you close the app."
+                message: "QuickPreview will no longer reserve a background shortcut after you close the app."
             )
         } catch {
             showInfoAlert(
@@ -719,77 +956,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func startFinderSelectionMonitor() {
-        finderSelectionMonitorTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: finderSelectionMonitorQueue)
-        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500))
-        timer.setEventHandler { [weak self] in
-            self?.followFinderSelectionIfNeeded()
-        }
-        finderSelectionMonitorTimer = timer
-        timer.resume()
+    private func updateShortcutHint() {
+        shortcutHintText = BackgroundShortcutConfiguration.windowTitleHint
+        windowController?.setShortcutHint(shortcutHintText ?? "")
     }
 
-    private func followFinderSelectionIfNeeded() {
-        if isSelectionCheckInProgress {
-            return
+    private func startFinderSelectionMonitor() {
+        guard AppEdition.current.supportsFinderIntegration else { return }
+        finderSelectionService.onSelectionSnapshot = { [weak self] snapshot in
+            self?.handleFinderSelectionSnapshot(snapshot)
         }
-        isSelectionCheckInProgress = true
-        defer { isSelectionCheckInProgress = false }
+        finderSelectionService.start()
+        refreshFinderSelectionMonitoring()
 
-        let loadedVideoURL: URL? = DispatchQueue.main.sync { [weak self] in
-            guard
-                let self,
-                let controller = self.windowController,
-                controller.hasLoadedVideo()
-            else {
-                return nil
+        guard workspaceActivationObserver == nil else { return }
+        workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshFinderSelectionMonitoring()
             }
-            return controller.loadedVideoURL()
         }
+    }
 
-        guard let loadedVideoURL else {
+    private func handleFinderSelectionSnapshot(_ snapshot: FinderSelectionSnapshot) {
+        guard AppEdition.current.supportsFinderIntegration else { return }
+        guard
+            subscriptionController.accessState.isEntitled,
+            let controller = windowController,
+            controller.hasLoadedVideo(),
+            let loadedVideoURL = controller.loadedVideoURL()
+        else {
             return
         }
 
-        let selectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL()
-        let selectionChanged = selectedVideoURL != lastObservedFinderSelectedVideoURL
-        lastObservedFinderSelectedVideoURL = selectedVideoURL
-
-        guard let selectedVideoURL else {
-            ignoredFinderSelectedVideoURL = nil
-            return
-        }
-
-        if ignoredFinderSelectedVideoURL == selectedVideoURL {
-            return
-        }
-        ignoredFinderSelectedVideoURL = nil
-
-        guard selectionChanged else {
-            return
-        }
-        guard selectedVideoURL != loadedVideoURL else {
-            return
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            guard
-                let self,
-                self.subscriptionController.accessState.isEntitled,
-                let controller = self.windowController,
-                controller.hasLoadedVideo(),
-                selectedVideoURL != controller.loadedVideoURL()
-            else {
+        switch snapshot.result {
+        case let .video(selectedVideoURL):
+            if ignoredFinderSelectedVideoURL == selectedVideoURL {
                 return
             }
+
+            guard selectedVideoURL != loadedVideoURL else {
+                ignoredFinderSelectedVideoURL = nil
+                return
+            }
+
+            ignoredFinderSelectedVideoURL = nil
             controller.openVideo(url: selectedVideoURL)
+        case .noSelection, .nonVideo:
+            ignoredFinderSelectedVideoURL = nil
+        case .automationDenied, .finderUnavailable, .scriptError:
+            break
         }
     }
 
     private func ignoreCurrentFinderSelection() {
-        ignoredFinderSelectedVideoURL = FinderSelectionProbe.selectedFinderVideoURL()
-        lastObservedFinderSelectedVideoURL = ignoredFinderSelectedVideoURL
+        guard AppEdition.current.supportsFinderIntegration else { return }
+        ignoredFinderSelectedVideoURL = finderSelectionService.readCurrentSelection(activateFinder: false).selectedVideoURL
+    }
+
+    private func refreshFinderSelectionMonitoring() {
+        guard AppEdition.current.supportsFinderIntegration else { return }
+        let state = FinderSelectionMonitoringState(
+            isFollowEnabled: true,
+            isEntitled: subscriptionController.accessState.isEntitled,
+            hasLoadedVideo: windowController?.hasLoadedVideo() == true,
+            isAppActive: NSApp.isActive,
+            isFinderFrontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder"
+        )
+        finderSelectionService.updateMonitoringState(state)
     }
 
     private func showStartupAlert(title: String, message: String) {
@@ -914,6 +1151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refreshAccessStateInBackground()
+                self?.refreshFinderSelectionMonitoring()
             }
         }
     }
@@ -961,6 +1199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showLoadingWindow: Bool,
         action: @escaping () -> Void
     ) {
+        if AppEdition.current == .pro {
+            pendingPostEntitlementAction = nil
+            action()
+            refreshAccessStateInBackground()
+            return
+        }
+
         pendingPostEntitlementAction = action
 
         if subscriptionController.accessState.isEntitled {
@@ -979,6 +1224,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func handleSubscriptionAccessStateChange(_ state: SubscriptionAccessState) {
+        if AppEdition.current == .pro {
+            dismissPaywallWindowIfNeeded()
+            switch state {
+            case .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                if !isMainWindowVisible {
+                    revealPlayerWindow(centerIfNeeded: false)
+                }
+            case .expired, .revoked, .refunded, .notEntitled, .unknown, .verifying:
+                break
+            }
+
+            refreshFinderSelectionMonitoring()
+            return
+        }
+
         switch state {
         case .unknown, .verifying:
             if !suppressSubscriptionLoadingWindow {
@@ -1001,6 +1265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             hideEntitledWindows()
             presentBlockedPaywall(for: state)
         }
+
+        refreshFinderSelectionMonitoring()
     }
 
     private func presentLoadingWindow() {
@@ -1039,8 +1305,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.onManageSubscription = { [weak self] in
             self?.subscriptionController.openManageSubscriptions()
         }
+        controller.onOpenAccountPortal = { [weak self] in
+            self?.beginAccountPortalFlow()
+        }
         controller.onShowHelp = { [weak self] in
             self?.handleShowGuide(nil)
+        }
+        controller.onOpenPrivacyPolicy = {
+            guard let url = AppEdition.current.privacyPolicyURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        controller.onOpenTermsOfUse = {
+            guard let url = AppEdition.current.termsOfUseURL else { return }
+            NSWorkspace.shared.open(url)
         }
         controller.onQuit = {
             NSApp.terminate(nil)
@@ -1061,6 +1338,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func startPurchaseFlow() {
+        guard AppEdition.current == .appStore else {
+            beginAccountPortalFlow()
+            return
+        }
+
         let controller = ensurePaywallWindowController()
         controller.apply(
             mode: .blocked(subscriptionController.accessState, makePaywallProductDetails()),
@@ -1101,6 +1383,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func startRestoreFlow() {
+        guard AppEdition.current == .appStore else {
+            beginAccountPortalFlow()
+            return
+        }
+
         let controller = ensurePaywallWindowController()
         controller.apply(
             mode: .blocked(subscriptionController.accessState, makePaywallProductDetails()),
@@ -1151,6 +1438,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func showPrimaryWindow() {
+        if subscriptionController.accessState.isEntitled {
+            revealPlayerWindow(centerIfNeeded: false)
+            return
+        }
+
+        switch subscriptionController.accessState {
+        case .unknown, .verifying:
+            requestSubscriptionAccess(showLoadingWindow: true) { [weak self] in
+                self?.revealPlayerWindow(centerIfNeeded: false)
+            }
+        case .expired, .revoked, .refunded, .notEntitled:
+            presentBlockedPaywall(for: subscriptionController.accessState)
+            refreshAccessStateInBackground()
+        case .trialActive,
+             .subscriptionActive,
+             .inGracePeriod,
+             .inBillingRetry,
+             .offlineGracePeriod:
+            revealPlayerWindow(centerIfNeeded: false)
+        }
+    }
+
     private func restoreBookmarksWindowIfNeeded() {
         guard BookmarksWindowController.shouldReopenOnLaunch() else {
             return
@@ -1198,6 +1508,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
+        if AppEdition.current == .pro {
+            revealPlayerWindow(centerIfNeeded: false)
+            if subscriptionController.accessState == .unknown || subscriptionController.accessState == .verifying {
+                refreshAccessStateInBackground()
+            }
+            return
+        }
+
         switch subscriptionController.accessState {
         case .trialActive,
              .subscriptionActive,
@@ -1212,100 +1530,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             refreshAccessStateInBackground()
         }
     }
-}
 
-private enum FinderSelectionProbe {
-    static func selectedFinderVideoURL() -> URL? {
-        guard let selectedURL = selectedFinderFileURL() else {
-            return nil
-        }
-        guard isVideoURL(selectedURL) else {
-            return nil
-        }
-        return selectedURL.standardizedFileURL
+    private func beginAccountPortalFlow() {
+        proEntitlementBridge.beginAccountPortal()
     }
 
-    private static func selectedFinderFileURL() -> URL? {
-        let lines: [String] = [
-            "tell application \"Finder\"",
-            "    set selectedItems to {}",
-            "",
-            "    try",
-            "        set selectedItems to selection",
-            "    end try",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        try",
-            "            if (count of Finder windows) > 0 then",
-            "                set selectedItems to (selection of front Finder window)",
-            "            end if",
-            "        end try",
-            "    end if",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        try",
-            "            set selectedItems to (every item of desktop whose selected is true)",
-            "        end try",
-            "    end if",
-            "",
-            "    if (count selectedItems) is 0 then",
-            "        return \"\"",
-            "    end if",
-            "",
-            "    set firstItem to item 1 of selectedItems",
-            "    return POSIX path of (firstItem as alias)",
-            "end tell"
-        ]
-        let script = lines.joined(separator: "\n")
-        guard let output = runAppleScriptUsingProcess(script), !output.isEmpty else {
-            return nil
+    private func presentFinderIntegrationRequiresProAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Finder Integration Needs QuickPreview PRO"
+        alert.informativeText = """
+        This workflow is available after you link your active QuickPreview subscription in the account portal.
+
+        You can keep using the player normally without enabling Finder integration.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open Account Portal")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            beginAccountPortalFlow()
         }
-        return URL(fileURLWithPath: output)
     }
 
-    private static func runAppleScriptUsingProcess(_ source: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-
-        var arguments: [String] = []
-        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
-        for line in lines {
-            arguments.append("-e")
-            arguments.append(String(line))
+    private func handleAccountLinkCallback(linkCode: String, email: String?) async {
+        do {
+            let response = try await proEntitlementBridge.linkAppStoreSubscription(
+                linkCode: linkCode,
+                subscriptionState: subscriptionController.accessState,
+                bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.jboive.quickpreview"
+            )
+            let resolvedEmail = response.email ?? email ?? "your account"
+            showInfoAlert(
+                title: "QuickPreview PRO Unlocked",
+                message: "Your active App Store subscription is now linked to \(resolvedEmail). You can download QuickPreview PRO from the website at no extra charge."
+            )
+            QuickPreviewDebugLog.log("Account link succeeded for \(resolvedEmail)")
+        } catch {
+            QuickPreviewDebugLog.log("Account link failed: \(error.localizedDescription)")
+            showInfoAlert(
+                title: "Account Link Failed",
+                message: error.localizedDescription
+            )
+            if AppEdition.current == .appStore {
+                let state = subscriptionController.accessState
+                if !state.isEntitled {
+                    presentBlockedPaywall(for: state)
+                }
+            }
         }
-        process.arguments = arguments
+    }
 
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
+    private func handleProSessionCallback(token: String?, email: String?) async {
+        guard let token, !token.isEmpty else {
+            showInfoAlert(
+                title: "QuickPreview PRO Sign-In Failed",
+                message: ProEntitlementBridgeError.invalidCallback.localizedDescription
+            )
+            return
+        }
 
         do {
-            try process.run()
-            process.waitUntilExit()
+            _ = try await proEntitlementBridge.handleProSessionCallback(
+                accessToken: token,
+                email: email
+            )
+            _ = await subscriptionController.refreshEntitlements()
+            showInfoAlert(
+                title: "QuickPreview PRO Ready",
+                message: "Finder integration is now unlocked for this Mac while your mirrored subscription access stays active."
+            )
         } catch {
-            return nil
-        }
-
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: outputData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func isVideoURL(_ url: URL) -> Bool {
-        do {
-            let values = try url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
-            if values.isDirectory == true {
-                return false
-            }
-            if let contentType = values.contentType {
-                return contentType.conforms(to: .movie)
-            }
-            return false
-        } catch {
-            return false
+            showInfoAlert(
+                title: "QuickPreview PRO Sign-In Failed",
+                message: error.localizedDescription
+            )
         }
     }
 }

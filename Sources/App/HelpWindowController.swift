@@ -44,15 +44,21 @@ final class HelpWindowController: NSWindowController {
             your settings saved per clip.
             """
         )
+        let finderOpenText = AppEdition.current.supportsFinderIntegration
+            ? "Open a video from File > Open..., drag and drop, or use Finder selection."
+            : "Open a video from File > Open... or drag and drop it into the player."
+        let proNoteText = AppEdition.current.supportsFinderIntegration
+            ? "QuickPreview PRO also keeps the Finder-follow workflow active while your mirrored subscriber access remains valid."
+            : "QuickPreview PRO, available to active subscribers from the website, adds live Finder-follow for people who want the Preview-style arrow-key workflow."
 
         stack.addArrangedSubview(titleLabel)
         stack.addArrangedSubview(introLabel)
         stack.addArrangedSubview(makeSectionDivider())
         stack.addArrangedSubview(makeSectionTitle("Getting Started"))
         stack.addArrangedSubview(makeBulletList([
-            "Open a video from File > Open..., drag and drop, or use Finder selection.",
+            finderOpenText,
             "Use the Autoplay switch in the main window when you want newly opened clips and bookmarks to stay paused.",
-            "Enable QuickPreview > Background Shortcut if you want the global shortcut to work after closing the app.",
+            "Use QuickPreview > Set Background Shortcut... if you want an optional global shortcut after closing the app.",
             "Click the video or press Space to play/pause, even while the bookmark manager is focused.",
             "When you are editing the bookmark search or tags fields, Space stays in that text field instead.",
             "Use Left/Right arrows for fine seek and Shift + arrows for coarse seek.",
@@ -84,8 +90,9 @@ final class HelpWindowController: NSWindowController {
         stack.addArrangedSubview(makeSectionTitle("Keyboard Shortcuts"))
         stack.addArrangedSubview(makeShortcutsTable())
         stack.addArrangedSubview(makeBodyLabel(
-            "The background helper tries Ctrl + Space first. If macOS reserves it for input switching, QuickPreview falls back to Option + Space or Cmd + Shift + Space."
+            "The background shortcut is optional and configurable. Pick one from QuickPreview > Set Background Shortcut... if you want QuickPreview to reopen from the background."
         ))
+        stack.addArrangedSubview(makeBodyLabel(proNoteText))
 
         if let infographicView = makeInfographicView() {
             stack.addArrangedSubview(makeSectionTitle("Feature Overview"))
@@ -154,9 +161,8 @@ final class HelpWindowController: NSWindowController {
     private func makeShortcutsTable() -> NSView {
         let rows: [(shortcut: String, action: String)] = [
             ("Cmd + O", "Open video file"),
-            ("Cmd + Shift + O", "Open current Finder selection"),
             ("Cmd + Shift + P", "Toggle autoplay for newly opened clips and bookmark jumps"),
-            ("Ctrl + Space", "Reopen QuickPreview from anywhere when Background Shortcut is enabled"),
+            ("Configured Background Shortcut", "Reopen QuickPreview from anywhere when the optional background shortcut is enabled"),
             ("Space", "Play / Pause, including from the bookmark manager unless a text field is being edited"),
             ("L", "Toggle loop on current clip"),
             ("R", "Rotate clockwise (0° / 90° / 180° / 270°)"),
@@ -173,10 +179,17 @@ final class HelpWindowController: NSWindowController {
             ("Cmd + Q", "Quit app")
         ]
 
+        let effectiveRows: [(shortcut: String, action: String)]
+        if AppEdition.current.supportsFinderIntegration {
+            effectiveRows = [("Cmd + Shift + O", "Open current Finder selection")] + rows
+        } else {
+            effectiveRows = rows
+        }
+
         let gridRows: [[NSView]] = [[
             makeTableHeaderCell("Shortcut"),
             makeTableHeaderCell("Action")
-        ]] + rows.map { row in
+        ]] + effectiveRows.map { row in
             [
                 makeTableBodyCell(row.shortcut),
                 makeTableBodyCell(row.action)

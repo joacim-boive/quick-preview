@@ -4,5 +4,10 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.jboive.quickpreview.shared</string>
+		<string>group.com.jboive.quickpreview.pro.bootstrap</string>
+	</array>
 </dict>
 </plist>

@@ -14,7 +14,10 @@ final class PaywallWindowController: NSWindowController {
     var onSubscribe: (() -> Void)?
     var onRestorePurchases: (() -> Void)?
     var onManageSubscription: (() -> Void)?
+    var onOpenAccountPortal: (() -> Void)?
     var onShowHelp: (() -> Void)?
+    var onOpenPrivacyPolicy: (() -> Void)?
+    var onOpenTermsOfUse: (() -> Void)?
     var onQuit: (() -> Void)?
 
     private let backgroundView = NSVisualEffectView()
@@ -30,6 +33,9 @@ final class PaywallWindowController: NSWindowController {
     private let trustLabel = NSTextField(
         wrappingLabelWithString: "Payment is handled by Apple. The subscription renews automatically unless canceled at least 24 hours before the current period ends."
     )
+    private let legalLinksRow = NSStackView()
+    private let privacyPolicyButton = NSButton(title: "Privacy Policy", target: nil, action: nil)
+    private let termsOfUseButton = NSButton(title: "Terms of Use", target: nil, action: nil)
     private let progressIndicator = NSProgressIndicator()
     private let subscribeButton = NSButton(title: "", target: nil, action: nil)
     private let secondaryActionsContainer = NSView()
@@ -44,12 +50,12 @@ final class PaywallWindowController: NSWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 548),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "QuickPreview Subscription"
+        window.title = "QuickPreview"
         window.center()
         self.init(window: window)
         configureUI()
@@ -220,10 +226,28 @@ final class PaywallWindowController: NSWindowController {
         trustLabel.textColor = .secondaryLabelColor
         trustLabel.maximumNumberOfLines = 0
 
+        [privacyPolicyButton, termsOfUseButton].forEach { button in
+            button.target = self
+            button.isBordered = false
+            button.font = .systemFont(ofSize: 12, weight: .medium)
+            button.contentTintColor = .linkColor
+            button.translatesAutoresizingMaskIntoConstraints = false
+        }
+        privacyPolicyButton.action = #selector(handlePrivacyPolicy(_:))
+        termsOfUseButton.action = #selector(handleTermsOfUse(_:))
+
+        legalLinksRow.translatesAutoresizingMaskIntoConstraints = false
+        legalLinksRow.orientation = .horizontal
+        legalLinksRow.alignment = .centerY
+        legalLinksRow.spacing = 12
+        legalLinksRow.addArrangedSubview(privacyPolicyButton)
+        legalLinksRow.addArrangedSubview(termsOfUseButton)
+
         planCard.addSubview(planNameLabel)
         planCard.addSubview(planSubtitleLabel)
         planCard.addSubview(priceLabel)
         planCard.addSubview(trustLabel)
+        planCard.addSubview(legalLinksRow)
 
         NSLayoutConstraint.activate([
             planNameLabel.topAnchor.constraint(equalTo: planCard.topAnchor, constant: 16),
@@ -240,7 +264,10 @@ final class PaywallWindowController: NSWindowController {
             trustLabel.topAnchor.constraint(equalTo: planSubtitleLabel.bottomAnchor, constant: 12),
             trustLabel.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 16),
             trustLabel.trailingAnchor.constraint(equalTo: planCard.trailingAnchor, constant: -16),
-            trustLabel.bottomAnchor.constraint(equalTo: planCard.bottomAnchor, constant: -16)
+
+            legalLinksRow.topAnchor.constraint(equalTo: trustLabel.bottomAnchor, constant: 8),
+            legalLinksRow.leadingAnchor.constraint(equalTo: planCard.leadingAnchor, constant: 12),
+            legalLinksRow.bottomAnchor.constraint(equalTo: planCard.bottomAnchor, constant: -12)
         ])
     }
 
@@ -252,7 +279,7 @@ final class PaywallWindowController: NSWindowController {
         secondaryActionsContainer.layer?.borderWidth = 1
         secondaryActionsContainer.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.18).cgColor
 
-        [restoreButton].forEach { button in
+        [restoreButton, manageButton, helpButton].forEach { button in
             button.target = self
             button.bezelStyle = .rounded
             button.controlSize = .small
@@ -273,23 +300,24 @@ final class PaywallWindowController: NSWindowController {
         secondaryButtonRow.alignment = .centerY
         secondaryButtonRow.distribution = .fillProportionally
         secondaryButtonRow.spacing = 0
-        [restoreButton].forEach(secondaryButtonRow.addArrangedSubview(_:))
+        [restoreButton, manageButton, helpButton].forEach(secondaryButtonRow.addArrangedSubview(_:))
         secondaryActionsContainer.addSubview(secondaryButtonRow)
     }
 
     private func render() {
         switch mode {
         case .loading:
-            titleLabel.stringValue = "Checking your subscription"
-            messageLabel.stringValue = "QuickPreview is confirming your App Store access before opening the player."
+            titleLabel.stringValue = "Checking subscription status"
+            messageLabel.stringValue = "QuickPreview is confirming your App Store subscription before opening the player."
             planNameLabel.stringValue = "QuickPreview Monthly"
             priceLabel.stringValue = "Loading..."
-            planSubtitleLabel.stringValue = "Then billed monthly unless canceled"
-            trustLabel.stringValue = "Payment is handled by Apple. The subscription renews automatically unless canceled at least 24 hours before the current period ends."
-            subscribeButton.title = "Preparing purchase options..."
+            planSubtitleLabel.stringValue = "1-month free trial, then billed monthly unless canceled"
+            trustLabel.stringValue = "Payment is handled by Apple. The auto-renewable subscription renews unless canceled at least 24 hours before the current period ends."
+            subscribeButton.title = "Loading subscription options..."
             subscribeButton.isHidden = true
             secondaryButtonRow.isHidden = true
             secondaryActionsContainer.isHidden = true
+            legalLinksRow.isHidden = true
             progressIndicator.isHidden = false
             progressIndicator.startAnimation(nil)
         case .blocked(let accessState, let productDetails):
@@ -303,22 +331,40 @@ final class PaywallWindowController: NSWindowController {
             subscribeButton.isHidden = false
             secondaryButtonRow.isHidden = false
             secondaryActionsContainer.isHidden = false
+            legalLinksRow.isHidden = AppEdition.current == .pro
             progressIndicator.stopAnimation(nil)
             progressIndicator.isHidden = true
         }
 
         subscribeButton.isEnabled = !isBusy && !subscribeButton.isHidden
         restoreButton.isEnabled = !isBusy && !secondaryButtonRow.isHidden
-        manageButton.isHidden = true
-        helpButton.isHidden = true
+        manageButton.isHidden = false
+        manageButton.isEnabled = !isBusy && !secondaryButtonRow.isHidden
+        helpButton.isHidden = AppEdition.current == .pro
+        helpButton.isEnabled = !isBusy && !helpButton.isHidden
+        privacyPolicyButton.isEnabled = !isBusy && !legalLinksRow.isHidden
+        termsOfUseButton.isEnabled = !isBusy && !legalLinksRow.isHidden
         quitButton.isEnabled = !isBusy
 
+        if AppEdition.current == .pro {
+            restoreButton.title = "Open Account Portal"
+            manageButton.title = "QuickPreview PRO Help"
+        } else {
+            restoreButton.title = "Restore Purchases"
+            manageButton.title = "Manage Subscription"
+            helpButton.title = "Help"
+        }
+
         if isBusy {
-            subscribeButton.title = "Contacting App Store..."
+            subscribeButton.title = AppEdition.current == .appStore ? "Contacting App Store..." : "Checking QuickPreview PRO access..."
         }
     }
 
     private func primaryActionTitle(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            return "Open Account Portal"
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Subscribe"
@@ -335,6 +381,10 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func productPriceText(from productDetails: PaywallProductDetails?) -> String {
+        if AppEdition.current == .pro {
+            return "Included"
+        }
+
         guard let productDetails else {
             return "$1.99 / month"
         }
@@ -348,6 +398,21 @@ final class PaywallWindowController: NSWindowController {
     ) -> String {
         let productName = productDetails?.displayName ?? "QuickPreview"
 
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked, .notEntitled:
+                return "QuickPreview PRO is included for active QuickPreview subscribers. Link your App Store subscription through the account portal, then sign in here to unlock Finder integration."
+            case .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "QuickPreview PRO checks your mirrored subscriber access through the account portal before opening the player."
+            }
+        }
+
         switch accessState {
         case .expired:
             return "Your subscription has ended. Subscribe again to continue using \(productName)."
@@ -356,7 +421,7 @@ final class PaywallWindowController: NSWindowController {
         case .revoked:
             return "This Apple account no longer has access to the subscription. Subscribe again or restore an eligible purchase."
         case .notEntitled:
-            return "Unlock QuickPreview Premium with a 1-month free trial."
+            return "Try QuickPreview free for one month. After the trial, continue with the QuickPreview Monthly auto-renewable subscription."
         case .unknown,
              .verifying,
              .trialActive,
@@ -364,11 +429,26 @@ final class PaywallWindowController: NSWindowController {
              .inGracePeriod,
              .inBillingRetry,
              .offlineGracePeriod:
-            return "A valid App Store subscription is required to use \(productName)."
+            return "An active QuickPreview Monthly subscription unlocks playback, looping, bookmarks, precision seeking, and keyboard controls."
         }
     }
 
     private func titleText(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked, .notEntitled:
+                return "Sign in to QuickPreview PRO"
+            case .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "Checking QuickPreview PRO access"
+            }
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Subscribe to continue"
@@ -385,6 +465,22 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func subtitleText(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked:
+                return "Included for active QuickPreview subscribers"
+            case .notEntitled,
+                 .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "Use the account portal to link and validate access"
+            }
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Billed monthly unless canceled"
@@ -401,6 +497,22 @@ final class PaywallWindowController: NSWindowController {
     }
 
     private func legalText(for accessState: SubscriptionAccessState) -> String {
+        if AppEdition.current == .pro {
+            switch accessState {
+            case .expired, .refunded, .revoked:
+                return "QuickPreview PRO does not bill directly. Keep your QuickPreview subscription active in the Mac App Store, then relink access through the account portal if needed."
+            case .notEntitled,
+                 .unknown,
+                 .verifying,
+                 .trialActive,
+                 .subscriptionActive,
+                 .inGracePeriod,
+                 .inBillingRetry,
+                 .offlineGracePeriod:
+                return "Your PRO unlock is mirrored from an active QuickPreview subscription and periodically revalidated through the account portal."
+            }
+        }
+
         switch accessState {
         case .expired, .refunded, .revoked:
             return "Payment is handled by Apple. Subscription management and renewal settings are available in the App Store."
@@ -425,19 +537,39 @@ final class PaywallWindowController: NSWindowController {
     @objc
     private func handleRestore(_ sender: Any?) {
         _ = sender
-        onRestorePurchases?()
+        if AppEdition.current == .pro {
+            onOpenAccountPortal?()
+        } else {
+            onRestorePurchases?()
+        }
     }
 
     @objc
     private func handleManage(_ sender: Any?) {
         _ = sender
-        onManageSubscription?()
+        if AppEdition.current == .pro {
+            onShowHelp?()
+        } else {
+            onManageSubscription?()
+        }
     }
 
     @objc
     private func handleHelp(_ sender: Any?) {
         _ = sender
         onShowHelp?()
+    }
+
+    @objc
+    private func handlePrivacyPolicy(_ sender: Any?) {
+        _ = sender
+        onOpenPrivacyPolicy?()
+    }
+
+    @objc
+    private func handleTermsOfUse(_ sender: Any?) {
+        _ = sender
+        onOpenTermsOfUse?()
     }
 
     @objc

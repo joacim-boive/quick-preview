@@ -3,11 +3,14 @@ import ServiceManagement
 
 enum BackgroundShortcutServiceError: LocalizedError {
     case helperAppMissing
+    case helperTerminationTimedOut
 
     var errorDescription: String? {
         switch self {
         case .helperAppMissing:
             return "QuickPreview could not find its background helper inside the app bundle."
+        case .helperTerminationTimedOut:
+            return "QuickPreview could not stop its background helper before reloading it."
         }
     }
 }
@@ -43,7 +46,7 @@ final class BackgroundShortcutService {
 
     func disable() throws {
         try service.unregister()
-        terminateRunningHelper()
+        try terminateRunningHelper()
         resetStartupPrompt()
     }
 
@@ -53,6 +56,10 @@ final class BackgroundShortcutService {
 
     func launchHelperIfNeeded() throws {
         guard status == .enabled else { return }
+        guard BackgroundShortcutConfiguration.selectedShortcut() != nil else {
+            try terminateRunningHelper()
+            return
+        }
         guard NSRunningApplication.runningApplications(
             withBundleIdentifier: BackgroundShortcutConfiguration.helperBundleIdentifier
         ).isEmpty else {
@@ -69,12 +76,49 @@ final class BackgroundShortcutService {
         NSWorkspace.shared.openApplication(at: helperURL, configuration: configuration) { _, _ in }
     }
 
-    private func terminateRunningHelper() {
-        NSRunningApplication.runningApplications(
+    func reloadHelperIfNeeded() throws {
+        guard status == .enabled else { return }
+        try terminateRunningHelper()
+        try launchHelperIfNeeded()
+    }
+
+    private func terminateRunningHelper() throws {
+        let timeout: TimeInterval = 2.0
+        let forceTerminateDelay: TimeInterval = 0.5
+        let pollInterval: TimeInterval = 0.05
+        let deadline = Date().addingTimeInterval(timeout)
+        let forceTerminateAfter = Date().addingTimeInterval(forceTerminateDelay)
+
+        var runningApplications = NSRunningApplication.runningApplications(
             withBundleIdentifier: BackgroundShortcutConfiguration.helperBundleIdentifier
-        ).forEach { runningApplication in
-            runningApplication.terminate()
+        )
+
+        guard !runningApplications.isEmpty else { return }
+
+        runningApplications.forEach { runningApplication in
+            _ = runningApplication.terminate()
         }
+
+        var didForceTerminate = false
+        while Date() < deadline {
+            runningApplications = NSRunningApplication.runningApplications(
+                withBundleIdentifier: BackgroundShortcutConfiguration.helperBundleIdentifier
+            )
+            if runningApplications.isEmpty {
+                return
+            }
+
+            if !didForceTerminate, Date() >= forceTerminateAfter {
+                didForceTerminate = true
+                runningApplications.forEach { runningApplication in
+                    _ = runningApplication.forceTerminate()
+                }
+            }
+
+            RunLoop.current.run(until: Date().addingTimeInterval(pollInterval))
+        }
+
+        throw BackgroundShortcutServiceError.helperTerminationTimedOut
     }
 
     private var service: SMAppService {

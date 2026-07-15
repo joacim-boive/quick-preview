@@ -39,4 +39,4 @@ Built artifacts were produced at:
 
 ## Known Constraints
 
-- Global hotkey uses `Ctrl+Space` in fallback app; users may need to adjust if this conflicts with system input-source shortcuts.
+- Background shortcuts now require an explicit user choice; the helper no longer assumes `Ctrl+Space` by default.

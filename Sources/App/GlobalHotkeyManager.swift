@@ -9,8 +9,25 @@ final class GlobalHotkeyManager {
     private var handler: HotkeyHandler?
     private(set) var activeShortcutName: String = "None"
 
+    static func canRegister(_ candidate: HotkeyRegistration) -> Bool {
+        var hotKeyRef: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: "QPVW".fourCharCodeValue)), id: 99)
+        let status = RegisterEventHotKey(
+            candidate.keyCode,
+            candidate.modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+        }
+        return status == noErr
+    }
+
     @discardableResult
-    func registerSpaceHotkey(handler: @escaping HotkeyHandler) -> Bool {
+    func registerSelectedHotkey(handler: @escaping HotkeyHandler) -> Bool {
         self.handler = handler
 
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
@@ -41,22 +58,23 @@ final class GlobalHotkeyManager {
             &hotKeyHandlerRef
         )
 
-        // Ctrl+Space often conflicts with macOS input source switching.
-        // Try multiple simple defaults and use the first that can be registered.
-        for candidate in BackgroundShortcutConfiguration.candidates {
-            let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: "QPVW".fourCharCodeValue)), id: 1)
-            let status = RegisterEventHotKey(
-                candidate.keyCode,
-                candidate.modifiers,
-                hotKeyID,
-                GetApplicationEventTarget(),
-                0,
-                &hotKeyRef
-            )
-            if status == noErr {
-                activeShortcutName = candidate.displayName
-                return true
-            }
+        guard let candidate = BackgroundShortcutConfiguration.selectedShortcut() else {
+            activeShortcutName = "None"
+            return false
+        }
+
+        let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: "QPVW".fourCharCodeValue)), id: 1)
+        let status = RegisterEventHotKey(
+            candidate.keyCode,
+            candidate.modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        if status == noErr {
+            activeShortcutName = candidate.displayName
+            return true
         }
 
         activeShortcutName = "Unavailable"
