@@ -20,9 +20,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify Vercel secrets
+        run: |
+          missing=0
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add secrets at Settings → Secrets and variables → Actions"
+            echo "  VERCEL_TOKEN       — https://vercel.com/account/tokens"
+            echo "  VERCEL_ORG_ID      — team_… from .vercel/project.json or Team Settings"
+            echo "  VERCEL_PROJECT_ID  — prj_… from .vercel/project.json or Project Settings"
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test bridge API
+        run: npm test
 
       - name: Install Vercel CLI
         run: npm install -g vercel@50.39.0
@@ -30,23 +53,23 @@ jobs:
       - name: Pull Vercel environment
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+            vercel pull --yes --environment=preview
           else
-            vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+            vercel pull --yes --environment=production
           fi
 
       - name: Build
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            vercel build --token="$VERCEL_TOKEN"
+            vercel build
           else
-            vercel build --prod --token="$VERCEL_TOKEN"
+            vercel build --prod
           fi
 
       - name: Deploy prebuilt
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            vercel deploy --prebuilt --token="$VERCEL_TOKEN"
+            vercel deploy --prebuilt
           else
-            vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+            vercel deploy --prebuilt --prod
           fi

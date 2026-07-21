@@ -8,7 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let backgroundShortcutService = BackgroundShortcutService()
     private let bookmarkStore = BookmarkStore()
     private let finderSelectionService = FinderSelectionService()
-    private let thumbnailService = VideoThumbnailService()
+    private let mediaAccessStore = SecurityScopedMediaAccessStore()
+    private lazy var thumbnailService = VideoThumbnailService(mediaAccessStore: mediaAccessStore)
+    private lazy var mediaLocationStore = MediaLocationStore()
+    private lazy var mediaLocationResolver = MediaLocationResolver(
+        store: mediaLocationStore,
+        mediaAccessStore: mediaAccessStore
+    )
     private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
     private let proEntitlementBridge = ProEntitlementBridge()
     private lazy var subscriptionController = SubscriptionController(
@@ -35,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let paranoidModeMenuItemTag = 4301
     private let backgroundShortcutMenuItemTag = 4302
     private let accountPortalMenuItemTag = 4303
+    private let exportResolveMenuItemTag = 4304
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -83,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         windowController?.closeCurrentVideoIfNeeded()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
+        mediaLocationStore.flushPendingWrites()
         finderSelectionService.stop()
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
@@ -170,6 +178,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             _ = controller.openFinderSelectionIfVideo(showErrors: true)
         }
         _ = sender
+    }
+
+    @objc
+    private func handleExportToResolveFromMenu(_ sender: Any?) {
+        _ = sender
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            self?.exportCurrentClipToResolve()
+        }
+    }
+
+    private func exportCurrentClipToResolve() {
+        let controller = ensureWindowController()
+        guard let range = controller.currentClipExportRange() else {
+            let alert = NSAlert()
+            alert.messageText = "Nothing to Export"
+            alert.informativeText = "Open a clip first, then export it to Resolve."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let bookmarks = bookmarkStore.bookmarks(
+            scope: .currentVideo,
+            currentVideoURL: range.url,
+            searchQuery: "",
+            sort: .automatic,
+            visibility: protectedBookmarksSessionController.isUnlocked ? .all : .publicOnly
+        )
+        let mediaAccessStore = self.mediaAccessStore
+        let suggestingName = range.url.deletingPathExtension().lastPathComponent
+        let window = controller.window
+        Task {
+            let result = await ResolveExportBuilder.build(
+                videoPath: range.url.path,
+                clipStart: range.start,
+                clipEnd: range.end,
+                bookmarks: bookmarks,
+                mediaAccessStore: mediaAccessStore
+            )
+            await MainActor.run {
+                ResolveExportCoordinator.presentSavePanel(
+                    for: result,
+                    suggestingName: suggestingName,
+                    window: window
+                )
+            }
+        }
     }
 
     @objc
@@ -364,6 +420,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 ? "Subscriber Account..."
                 : "Manage QuickPreview PRO Access..."
             return true
+        case exportResolveMenuItemTag:
+            return isEntitled && controller?.hasLoadedVideo() == true
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
@@ -429,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let controller = MainPlayerWindowController(
             bookmarkStore: bookmarkStore,
             thumbnailService: thumbnailService,
+            mediaAccessStore: mediaAccessStore,
             finderSelectionService: finderSelectionService
         )
         if let shortcutHintText {
@@ -440,6 +499,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.onCurrentVideoURLChange = { [weak self] videoURL in
             self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
             self?.refreshFinderSelectionMonitoring()
+            if let videoURL {
+                self?.mediaLocationResolver.resolve(url: videoURL)
+            }
         }
         controller.onBookmarkNavigationRequested = { [weak self] delta in
             self?.bookmarksWindowController?.navigateSelection(delta: delta)
@@ -465,6 +527,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let controller = BookmarksWindowController(
             bookmarkStore: bookmarkStore,
             thumbnailService: thumbnailService,
+            mediaAccessStore: mediaAccessStore,
+            mediaLocationStore: mediaLocationStore,
+            mediaLocationResolver: mediaLocationResolver,
             protectedBookmarksSessionController: protectedBookmarksSessionController
         )
         controller.onOpenBookmark = { [weak self] bookmark in
@@ -476,6 +541,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         controller.onPlayPauseRequested = { [weak self] in
             self?.windowController?.togglePlayPauseIfPossible()
+        }
+        controller.onFlushPersistedClipSelection = { [weak self] in
+            self?.windowController?.flushPersistedStateWrites()
         }
         controller.onWindowClosed = { [weak self] in
             self?.protectedBookmarksSessionController.lock()
@@ -583,6 +651,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
             fileMenu.addItem(openFinderSelectionItem)
         }
+
+        fileMenu.addItem(.separator())
+        let exportResolveItem = NSMenuItem(
+            title: "Export to Resolve…",
+            action: #selector(handleExportToResolveFromMenu(_:)),
+            keyEquivalent: "e"
+        )
+        exportResolveItem.target = self
+        exportResolveItem.keyEquivalentModifierMask = [.command, .shift]
+        exportResolveItem.tag = exportResolveMenuItemTag
+        fileMenu.addItem(exportResolveItem)
+
         fileMenuItem.submenu = fileMenu
 
         let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
@@ -1225,7 +1305,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func handleSubscriptionAccessStateChange(_ state: SubscriptionAccessState) {
         if AppEdition.current == .pro {
-            dismissPaywallWindowIfNeeded()
             switch state {
             case .trialActive,
                  .subscriptionActive,
@@ -1238,6 +1317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case .expired, .revoked, .refunded, .notEntitled, .unknown, .verifying:
                 break
             }
+            dismissPaywallWindowIfNeeded()
 
             refreshFinderSelectionMonitoring()
             return
@@ -1253,7 +1333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
              .inGracePeriod,
              .inBillingRetry,
              .offlineGracePeriod:
-            dismissPaywallWindowIfNeeded()
             let pendingAction = pendingPostEntitlementAction
             pendingPostEntitlementAction = nil
             if let pendingAction {
@@ -1261,6 +1340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             } else if !isMainWindowVisible {
                 revealPlayerWindow(centerIfNeeded: false)
             }
+            dismissPaywallWindowIfNeeded()
         case .expired, .revoked, .refunded, .notEntitled:
             hideEntitledWindows()
             presentBlockedPaywall(for: state)
@@ -1423,7 +1503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func dismissPaywallWindowIfNeeded() {
-        paywallWindowController?.close()
+        paywallWindowController?.window?.orderOut(nil)
     }
 
     private func revealPlayerWindow(centerIfNeeded: Bool) {

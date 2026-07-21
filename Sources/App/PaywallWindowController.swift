@@ -57,6 +57,7 @@ final class PaywallWindowController: NSWindowController {
         )
         window.title = "QuickPreview"
         window.center()
+        window.isReleasedWhenClosed = false
         self.init(window: window)
         configureUI()
     }

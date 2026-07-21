@@ -17,7 +17,9 @@ struct BookmarkTimelineMarker: Equatable, Comparable {
 final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     private let engine = PlaybackEngine()
     private let bookmarkStore: BookmarkStore
+    private let mediaAccessStore: SecurityScopedMediaAccessStore
     private let finderSelectionService: FinderSelectionService
+    private var accessedVideoURL: URL?
     private let bookmarkTimelineHoverPreview: BookmarkTimelineMarkerHoverPreviewController
     private let playerView = PlayerSurfaceView(frame: .zero)
     private let inlineTimelineView = InlineSelectionTimelineView(frame: .zero)
@@ -133,9 +135,11 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     init(
         bookmarkStore: BookmarkStore,
         thumbnailService: VideoThumbnailService,
+        mediaAccessStore: SecurityScopedMediaAccessStore,
         finderSelectionService: FinderSelectionService
     ) {
         self.bookmarkStore = bookmarkStore
+        self.mediaAccessStore = mediaAccessStore
         self.finderSelectionService = finderSelectionService
         self.bookmarkTimelineHoverPreview = BookmarkTimelineMarkerHoverPreviewController(
             thumbnailService: thumbnailService
@@ -169,6 +173,9 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         if let bookmarkChangeObserver {
             NotificationCenter.default.removeObserver(bookmarkChangeObserver)
         }
+        if let accessedVideoURL {
+            mediaAccessStore.endAccess(for: accessedVideoURL)
+        }
     }
 
     func revealWindow() {
@@ -185,9 +192,25 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         }
         persistCurrentClipPlaybackStateIfNeeded(flushImmediately: true)
         bookmarkTimelineHoverPreview.hide()
-        let normalizedURL = url.standardizedFileURL
+
+        mediaAccessStore.register(url)
+        guard let accessibleURL = mediaAccessStore.beginAccess(for: url) else {
+            playerView.flashStatusMessage("Unable to Access Video")
+            showInfoAlert(
+                title: "Unable to Access Video",
+                message: "QuickPreview no longer has permission to read this file. Re-import it from Bookmarks or open it again with File → Open."
+            )
+            return
+        }
+        if let previousAccessedURL = accessedVideoURL,
+           previousAccessedURL.quickPreviewNormalizedPath != accessibleURL.quickPreviewNormalizedPath {
+            mediaAccessStore.endAccess(for: previousAccessedURL)
+        }
+        accessedVideoURL = accessibleURL
+
+        let normalizedURL = accessibleURL.quickPreviewNormalizedFileURL
         Self.storeLastOpenedVideoURL(normalizedURL)
-        engine.attach(to: normalizedURL, autoplay: isAutoplayEnabled)
+        engine.attach(to: accessibleURL, autoplay: isAutoplayEnabled)
         currentVideoURL = normalizedURL
         synchronizeCurrentClipBookmarks()
         lastKnownDuration = 0
@@ -256,6 +279,25 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func loadedVideoURL() -> URL? {
         currentVideoURL
+    }
+
+    /// Current in/out for Resolve export (falls back to full duration when no selection).
+    func currentClipExportRange() -> (url: URL, start: PlaybackSeconds, end: PlaybackSeconds)? {
+        guard let url = currentVideoURL else {
+            return nil
+        }
+        let duration = max(engine.currentDurationSeconds(), 0)
+        let start = min(max(selectionStart, 0), duration > 0 ? duration : selectionStart)
+        let end: PlaybackSeconds
+        if duration > 0 {
+            end = min(max(selectionEnd, start), duration)
+        } else {
+            end = max(selectionEnd, start)
+        }
+        if end <= start, duration > 0 {
+            return (url, 0, duration)
+        }
+        return (url, start, end)
     }
 
     func hasLoadedVideo() -> Bool {
@@ -372,6 +414,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         panel.allowsMultipleSelection = false
         panel.beginSheetModal(for: window!) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
+            self?.mediaAccessStore.register(url)
             self?.openVideo(url: url)
         }
     }
@@ -594,6 +637,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             guard let self else { return }
             let videoURL = urls.first(where: self.isVideoURL(_:))
             guard let videoURL else { return }
+            self.mediaAccessStore.register(videoURL)
             self.openVideo(url: videoURL)
         }
         installEscCloseMonitor()
@@ -859,7 +903,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private static func storeLastOpenedVideoURL(_ url: URL, defaults: UserDefaults = .standard) {
-        defaults.set(url.standardizedFileURL.path, forKey: lastOpenedVideoPathDefaultsKey)
+        defaults.set(url.quickPreviewNormalizedPath, forKey: lastOpenedVideoPathDefaultsKey)
     }
 
     private func storedSelection(for url: URL) -> ClipSelection? {
@@ -995,7 +1039,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func openBookmark(_ bookmark: Bookmark) {
-        let targetURL = bookmark.videoURL.standardizedFileURL
+        let targetURL = bookmark.videoURL
         guard FileManager.default.fileExists(atPath: targetURL.path) else {
             playerView.flashStatusMessage("Bookmark File Missing")
             return
@@ -1003,7 +1047,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         window?.orderFront(nil)
         setSelectedBookmarkID(bookmark.id, persistPlaybackState: true)
 
-        if currentVideoURL?.path != targetURL.path {
+        if currentVideoURL?.quickPreviewNormalizedPath != targetURL.quickPreviewNormalizedPath {
             pendingBookmarkNavigationTime = bookmark.timeSeconds
             openVideo(url: targetURL, shouldRevealWindow: false)
             setSelectedBookmarkID(bookmark.id, persistPlaybackState: true)
@@ -1023,10 +1067,10 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        let normalizedVideoPath = currentVideoURL.standardizedFileURL.path
+        let normalizedVideoPath = currentVideoURL.quickPreviewNormalizedPath
         currentClipBookmarks = bookmarkStore.allBookmarks(visibility: .all)
             .lazy
-            .filter { $0.videoPath == normalizedVideoPath }
+            .filter { $0.normalizedVideoPath == normalizedVideoPath }
             .map { BookmarkTimelineMarker(id: $0.id, timeSeconds: $0.timeSeconds) }
             .filter { $0.timeSeconds.isFinite && $0.timeSeconds >= 0 }
             .sorted()
@@ -1050,7 +1094,7 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
             bookmarkTimelineHoverPreview.hide()
             return
         }
-        guard bookmark.videoPath == url.standardizedFileURL.path else {
+        guard bookmark.normalizedVideoPath == url.quickPreviewNormalizedPath else {
             bookmarkTimelineHoverPreview.hide()
             return
         }

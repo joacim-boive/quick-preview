@@ -34,6 +34,7 @@ final class VideoThumbnailService {
         }
     }
 
+    private let mediaAccessStore: SecurityScopedMediaAccessStore
     private let cache = NSCache<NSString, NSImage>()
     private let queue = DispatchQueue(label: "quickpreview.video-thumbnail-service", qos: .userInitiated)
     private let stateQueue = DispatchQueue(label: "quickpreview.video-thumbnail-service.state")
@@ -42,7 +43,8 @@ final class VideoThumbnailService {
     private var latestInteractiveRequestIDByVideoPath: [String: Int] = [:]
     private var interactiveInFlightCacheKeyByVideoPath: [String: NSString] = [:]
 
-    init() {
+    init(mediaAccessStore: SecurityScopedMediaAccessStore) {
+        self.mediaAccessStore = mediaAccessStore
         cache.countLimit = 600
     }
 
@@ -75,7 +77,7 @@ final class VideoThumbnailService {
             return
         }
 
-        let normalizedURL = videoURL.standardizedFileURL
+        let normalizedURL = videoURL.quickPreviewNormalizedFileURL
         let nsCacheKey = cacheKey as NSString
         stateQueue.async { [weak self] in
             guard let self else { return }
@@ -126,7 +128,7 @@ final class VideoThumbnailService {
         cacheKey: String,
         completion: @escaping (NSImage?) -> Void
     ) {
-        let normalizedURL = videoURL.standardizedFileURL
+        let normalizedURL = videoURL.quickPreviewNormalizedFileURL
         let normalizedPath = normalizedURL.path
         let nsCacheKey = cacheKey as NSString
 
@@ -150,7 +152,17 @@ final class VideoThumbnailService {
 
             self.queue.async { [weak self] in
                 guard let self else { return }
-                let generator = self.imageGenerator(for: normalizedURL)
+                guard let accessibleURL = self.mediaAccessStore.beginAccess(for: normalizedURL) else {
+                    self.finishInteractiveRequest(
+                        normalizedPath: normalizedPath,
+                        nsCacheKey: nsCacheKey,
+                        requestID: requestID,
+                        generatedImage: nil
+                    )
+                    return
+                }
+
+                let generator = self.imageGenerator(for: accessibleURL)
                 generator.cancelAllCGImageGeneration()
                 self.configure(
                     imageGenerator: generator,
@@ -161,27 +173,40 @@ final class VideoThumbnailService {
                 let requestedTime = CMTime(seconds: max(timeSeconds, 0), preferredTimescale: 600)
                 generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: requestedTime)]) { [weak self] _, cgImage, _, _, _ in
                     guard let self else { return }
+                    defer { self.mediaAccessStore.endAccess(for: accessibleURL) }
                     let generatedImage = cgImage.map { NSImage(cgImage: $0, size: .zero) }
+                    self.finishInteractiveRequest(
+                        normalizedPath: normalizedPath,
+                        nsCacheKey: nsCacheKey,
+                        requestID: requestID,
+                        generatedImage: generatedImage
+                    )
+                }
+            }
+        }
+    }
 
-                    self.stateQueue.async { [weak self] in
-                        guard let self else { return }
+    private func finishInteractiveRequest(
+        normalizedPath: String,
+        nsCacheKey: NSString,
+        requestID: Int,
+        generatedImage: NSImage?
+    ) {
+        stateQueue.async { [weak self] in
+            guard let self else { return }
 
-                        let isLatestRequest =
-                            self.latestInteractiveRequestIDByVideoPath[normalizedPath] == requestID
-                            && self.interactiveInFlightCacheKeyByVideoPath[normalizedPath] == nsCacheKey
+            let isLatestRequest =
+                self.latestInteractiveRequestIDByVideoPath[normalizedPath] == requestID
+                && self.interactiveInFlightCacheKeyByVideoPath[normalizedPath] == nsCacheKey
 
-                        let completions = self.inFlightRequests.removeValue(forKey: nsCacheKey) ?? []
-                        if isLatestRequest {
-                            self.interactiveInFlightCacheKeyByVideoPath.removeValue(forKey: normalizedPath)
-                            if let generatedImage {
-                                self.cache.setObject(generatedImage, forKey: nsCacheKey)
-                            }
-                            DispatchQueue.main.async {
-                                completions.forEach { $0(generatedImage) }
-                            }
-                            return
-                        }
-                    }
+            let completions = self.inFlightRequests.removeValue(forKey: nsCacheKey) ?? []
+            if isLatestRequest {
+                self.interactiveInFlightCacheKeyByVideoPath.removeValue(forKey: normalizedPath)
+                if let generatedImage {
+                    self.cache.setObject(generatedImage, forKey: nsCacheKey)
+                }
+                DispatchQueue.main.async {
+                    completions.forEach { $0(generatedImage) }
                 }
             }
         }
@@ -193,7 +218,12 @@ final class VideoThumbnailService {
         maximumSize: CGSize?,
         mode: RequestMode
     ) -> NSImage? {
-        let imageGenerator = imageGenerator(for: videoURL)
+        guard let accessibleURL = mediaAccessStore.beginAccess(for: videoURL) else {
+            return nil
+        }
+        defer { mediaAccessStore.endAccess(for: accessibleURL) }
+
+        let imageGenerator = imageGenerator(for: accessibleURL)
         configure(imageGenerator: imageGenerator, maximumSize: maximumSize, mode: mode)
 
         let requestedTime = CMTime(seconds: timeSeconds, preferredTimescale: 600)
@@ -220,7 +250,7 @@ final class VideoThumbnailService {
     }
 
     private func imageGenerator(for videoURL: URL) -> AVAssetImageGenerator {
-        let normalizedPath = videoURL.standardizedFileURL.path
+        let normalizedPath = videoURL.quickPreviewNormalizedPath
         if let existingGenerator = imageGeneratorsByVideoPath[normalizedPath] {
             return existingGenerator
         }
@@ -243,8 +273,8 @@ final class VideoThumbnailService {
         if let maximumSize {
             let roundedWidth = Int(maximumSize.width.rounded())
             let roundedHeight = Int(maximumSize.height.rounded())
-            return "\(videoURL.standardizedFileURL.path)|\(roundedMilliseconds)|\(roundedWidth)x\(roundedHeight)|\(bucketMilliseconds)"
+            return "\(videoURL.quickPreviewNormalizedPath)|\(roundedMilliseconds)|\(roundedWidth)x\(roundedHeight)|\(bucketMilliseconds)"
         }
-        return "\(videoURL.standardizedFileURL.path)|\(roundedMilliseconds)|native|\(bucketMilliseconds)"
+        return "\(videoURL.quickPreviewNormalizedPath)|\(roundedMilliseconds)|native|\(bucketMilliseconds)"
     }
 }

@@ -66,25 +66,25 @@ enum AppEdition: String {
     var accountPortalURL: URL? {
         switch self {
         case .appStore:
-            return URL(string: "https://quickpreview.boive.se/pro/")
+            return URL(string: "https://boive.se/quick-preview/pro/")
         case .pro:
-            return URL(string: "https://quickpreview.boive.se/pro/download/")
+            return URL(string: "https://boive.se/quick-preview/pro/download/")
         }
     }
 
     var supportURL: URL? {
-        URL(string: "https://quickpreview.boive.se/support/")
+        URL(string: "https://boive.se/quick-preview/support/")
     }
 
     var privacyPolicyURL: URL? {
-        URL(string: "https://quickpreview.boive.se/privacy/")
+        URL(string: "https://boive.se/quick-preview/privacy/")
     }
 
     var termsOfUseURL: URL? {
         URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")
     }
 
-    /// Hosts only `/api/bridge/*` (Vercel). Marketing HTML stays on `quickpreview.boive.se`.
+    /// Hosts only `/api/bridge/*` (Vercel). Marketing HTML stays on `boive.se/quick-preview`.
     /// Match **Vercel → Project → Domains** (prefer the stable `*.vercel.app` without a deployment hash when listed).
     var bridgeAPIBaseURL: URL? {
         URL(string: "https://quick-preview-alpha.vercel.app/api/bridge/")

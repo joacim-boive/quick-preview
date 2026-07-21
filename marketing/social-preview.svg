@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">QuickPreview social preview</title>
+  <desc id="desc">Marketing preview card for QuickPreview.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#07131c" />
+      <stop offset="55%" stop-color="#0a2230" />
+      <stop offset="100%" stop-color="#081018" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#70e6ff" />
+      <stop offset="100%" stop-color="#279dff" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <circle cx="170" cy="118" r="180" fill="#6ce4ff" fill-opacity="0.14" />
+  <circle cx="1040" cy="92" r="160" fill="#ffd166" fill-opacity="0.1" />
+  <rect x="74" y="74" width="1052" height="482" rx="34" fill="rgba(8,20,30,0.68)" stroke="rgba(146,201,224,0.32)" />
+  <rect x="118" y="122" width="168" height="168" rx="36" fill="url(#accent)" />
+  <circle cx="202" cy="206" r="52" fill="none" stroke="rgba(255,255,255,0.24)" stroke-width="12" />
+  <path d="M183 168c0-5.2 5.9-8.4 10.4-5.5l47.8 30.9c4.2 2.7 4.2 8.9 0 11.6l-47.8 30.9c-4.5 2.9-10.4-.3-10.4-5.5v-61.8Z" fill="#ffffff" />
+  <text x="334" y="208" fill="#6ce4ff" font-family="Arial, sans-serif" font-size="28" font-weight="700" letter-spacing="8">QUICKPREVIEW</text>
+  <text x="334" y="302" fill="#eff8fc" font-family="Arial Narrow, Arial, sans-serif" font-size="88" font-weight="800">FAST VIDEO REVIEW.</text>
+  <text x="334" y="392" fill="#eff8fc" font-family="Arial Narrow, Arial, sans-serif" font-size="88" font-weight="800">PRECISE LOOPING.</text>
+  <text x="334" y="456" fill="#a6c5d3" font-family="Arial, sans-serif" font-size="34">
+    Lightweight macOS playback for frame-step review, loop segments, and
+  </text>
+  <text x="334" y="500" fill="#a6c5d3" font-family="Arial, sans-serif" font-size="34">
+    fast Finder-driven workflows.
+  </text>
+</svg>

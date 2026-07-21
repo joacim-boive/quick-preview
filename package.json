@@ -6,7 +6,9 @@
   },
   "scripts": {
     "build": "rm -rf public && mkdir -p public && cp -R site/. public/",
-    "vercel-build": "npm run build"
+    "vercel-build": "npm run build",
+    "test": "node --test api/bridge/__tests__/*.test.js",
+    "test:bridge": "npm test"
   },
   "dependencies": {
     "@vercel/blob": "^2.3.3"

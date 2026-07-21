@@ -1,0 +1,53 @@
+{
+  "slug": "quick-preview",
+  "name": "QuickPreview",
+  "status": "Available for macOS",
+  "tagline": "Review faster. Remember more. Keep it private.",
+  "summary": "A focused macOS video player for fast review, searchable bookmarks, remembered clip settings, and protected media access.",
+  "path": "/quick-preview/",
+  "platform": "macOS",
+  "siteKind": "full",
+  "themeClass": "quick-preview-theme",
+  "brandSubtitle": "Fast video review for macOS",
+  "footerTagline": "Built for fast macOS video review.",
+  "icon": "icon.png",
+  "socialImage": "social-preview.svg",
+  "featuredImage": "screenshots/quickpreview-guide-infographic.png",
+  "theme": {
+    "background": "#06131b",
+    "surface": "#0a1f2b",
+    "text": "#eff8fc",
+    "muted": "#a6c5d3",
+    "accent": "#6ce4ff",
+    "accentSecondary": "#ffd166"
+  },
+  "fonts": {
+    "sans": "Manrope",
+    "display": "Teko"
+  },
+  "nav": [
+    { "key": "home", "label": "Home", "href": "/quick-preview/" },
+    { "key": "features", "label": "Features", "href": "/quick-preview/features/" },
+    { "key": "pro", "label": "QuickPreview PRO", "href": "/quick-preview/pro/" },
+    {
+      "key": "support",
+      "label": "Support",
+      "href": "/quick-preview/support/",
+      "children": [
+        { "key": "support", "label": "Support FAQ", "href": "/quick-preview/support/" },
+        { "key": "pricing", "label": "Pricing", "href": "/quick-preview/pricing/" },
+        { "key": "changelog", "label": "Changelog", "href": "/quick-preview/changelog/" }
+      ]
+    }
+  ],
+  "links": {
+    "features": "/quick-preview/features/",
+    "pricing": "/quick-preview/pricing/",
+    "support": "/quick-preview/support/",
+    "changelog": "/quick-preview/changelog/"
+  },
+  "externalCta": {
+    "label": "Mac App Store",
+    "href": "https://apps.apple.com/se/app/quickpreview/id6761481600?l=en-GB&mt=12"
+  }
+}

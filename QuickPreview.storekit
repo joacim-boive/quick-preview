@@ -1,4 +1,14 @@
 {
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
   "identifier" : "6D4C2F19",
   "nonRenewingSubscriptions" : [
 
@@ -7,7 +17,18 @@
 
   ],
   "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
 
+    ],
+    "_timeRate" : 0
   },
   "subscriptionGroups" : [
     {
@@ -15,11 +36,20 @@
       "localizations" : [
 
       ],
-      "name" : "QuickPreview Pro",
+      "name" : "QuickPreview",
       "subscriptions" : [
         {
           "adHocOffers" : [
 
+          ],
+          "billingPlans" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "commitmentDisplayPrice" : "1.99",
+              "displayPrice" : "1.99",
+              "internalID" : "EA1BF042",
+              "isEnabled" : true
+            }
           ],
           "codeOffers" : [
 
@@ -29,11 +59,21 @@
           "groupNumber" : 1,
           "internalID" : "5E8721AC",
           "introductoryOffer" : {
+            "billingPlanType" : "BILLED_UPFRONT",
             "internalID" : "7A2B9C1D",
             "numberOfPeriods" : 1,
             "paymentMode" : "free",
             "subscriptionPeriod" : "P1M"
           },
+          "introductoryOffers" : [
+            {
+              "billingPlanType" : "BILLED_UPFRONT",
+              "internalID" : "7A2B9C1D",
+              "numberOfPeriods" : 1,
+              "paymentMode" : "free",
+              "subscriptionPeriod" : "P1M"
+            }
+          ],
           "localizations" : [
             {
               "description" : "Unlock QuickPreview with a monthly subscription.",
@@ -45,13 +85,16 @@
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "QuickPreview Monthly",
           "subscriptionGroupID" : "A1C43F8B",
-          "type" : "RecurringSubscription"
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
         }
       ]
     }
   ],
   "version" : {
-    "major" : 2,
+    "major" : 5,
     "minor" : 0
   }
 }
