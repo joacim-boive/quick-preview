@@ -140,6 +140,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     var onWindowClosed: (() -> Void)?
     var onEscapeKey: (() -> Void)?
     var onPlayPauseRequested: (() -> Void)?
+    /// Flush debounced player clip-selection writes before reading `ClipSelectionStore`.
+    var onFlushPersistedClipSelection: (() -> Void)?
 
     init(
         bookmarkStore: BookmarkStore,
@@ -1162,15 +1164,25 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        let result = ResolveExportBuilder.build(
-            selectedBookmarks: selected,
-            mediaAccessStore: mediaAccessStore
-        )
-        ResolveExportCoordinator.presentSavePanel(
-            for: result,
-            suggestingName: "QuickPreview Export",
-            window: window
-        )
+        onFlushPersistedClipSelection?()
+
+        let mediaAccessStore = self.mediaAccessStore
+        exportResolveButton.isEnabled = false
+        Task { [weak self] in
+            let result = await ResolveExportBuilder.build(
+                selectedBookmarks: selected,
+                mediaAccessStore: mediaAccessStore
+            )
+            await MainActor.run {
+                guard let self else { return }
+                self.exportResolveButton.isEnabled = !self.tableView.selectedRowIndexes.isEmpty
+                ResolveExportCoordinator.presentSavePanel(
+                    for: result,
+                    suggestingName: "QuickPreview Export",
+                    window: self.window
+                )
+            }
+        }
     }
 
     private enum BulkTagEditMode {

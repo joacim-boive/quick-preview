@@ -56,7 +56,7 @@ enum ResolveExportBuilder {
         defaults: UserDefaults = .standard,
         mediaAccessStore: SecurityScopedMediaAccessStore? = nil,
         timingProvider: MediaTimingProviding = AVAssetMediaTimingProvider()
-    ) -> ResolveExportBuildResult {
+    ) async -> ResolveExportBuildResult {
         var orderedPaths: [String] = []
         var bookmarksByPath: [String: [Bookmark]] = [:]
 
@@ -69,7 +69,7 @@ enum ResolveExportBuilder {
             bookmarksByPath[path, default: []].append(bookmark)
         }
 
-        return build(
+        return await build(
             orderedPaths: orderedPaths,
             bookmarksByPath: bookmarksByPath,
             clipOverrides: [:],
@@ -88,13 +88,13 @@ enum ResolveExportBuilder {
         defaults: UserDefaults = .standard,
         mediaAccessStore: SecurityScopedMediaAccessStore? = nil,
         timingProvider: MediaTimingProviding = AVAssetMediaTimingProvider()
-    ) -> ResolveExportBuildResult {
+    ) async -> ResolveExportBuildResult {
         let path = URL(fileURLWithPath: videoPath).quickPreviewNormalizedPath
         var overrides: [String: (PlaybackSeconds, PlaybackSeconds)] = [:]
         if let clipStart, let clipEnd {
             overrides[path] = (clipStart, clipEnd)
         }
-        return build(
+        return await build(
             orderedPaths: [path],
             bookmarksByPath: [path: bookmarks],
             clipOverrides: overrides,
@@ -111,7 +111,7 @@ enum ResolveExportBuilder {
         defaults: UserDefaults,
         mediaAccessStore: SecurityScopedMediaAccessStore?,
         timingProvider: MediaTimingProviding
-    ) -> ResolveExportBuildResult {
+    ) async -> ResolveExportBuildResult {
         var items: [ResolveExportItem] = []
         var skipped: [String] = []
         var usedFallback = false
@@ -125,7 +125,7 @@ enum ResolveExportBuilder {
                 }
             }
 
-            guard let timing = timingProvider.timing(for: accessibleURL) else {
+            guard let timing = await timingProvider.timing(for: accessibleURL) else {
                 skipped.append(path)
                 continue
             }
@@ -149,7 +149,8 @@ enum ResolveExportBuilder {
             let markers = markers(
                 from: sourceBookmarks,
                 clipStart: range.start,
-                clipEnd: range.end
+                clipEnd: range.end,
+                frameRate: timing.frameRate
             )
 
             items.append(
@@ -178,7 +179,8 @@ enum ResolveExportBuilder {
     static func markers(
         from bookmarks: [Bookmark],
         clipStart: PlaybackSeconds,
-        clipEnd: PlaybackSeconds
+        clipEnd: PlaybackSeconds,
+        frameRate: Double
     ) -> [ResolveExportMarker] {
         bookmarks
             .filter { $0.timeSeconds >= clipStart && $0.timeSeconds <= clipEnd }
@@ -189,7 +191,7 @@ enum ResolveExportBuilder {
                 if let first = tags.first, !first.isEmpty {
                     name = first
                 } else {
-                    name = formatTimecode(bookmark.timeSeconds)
+                    name = formatTimecode(bookmark.timeSeconds, frameRate: frameRate)
                 }
                 let remaining = Array(tags.dropFirst())
                 let note = remaining.isEmpty ? nil : remaining.joined(separator: ", ")
@@ -224,13 +226,14 @@ enum ResolveExportBuilder {
         return (lower, upper)
     }
 
-    static func formatTimecode(_ seconds: PlaybackSeconds) -> String {
+    static func formatTimecode(_ seconds: PlaybackSeconds, frameRate: Double) -> String {
+        let fps = frameRate > 0 ? frameRate : fallbackFrameRate
         let total = max(Int(seconds.rounded(.down)), 0)
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60
         let fraction = seconds - PlaybackSeconds(total)
-        let frames = Int((fraction * fallbackFrameRate).rounded(.down))
+        let frames = Int((fraction * fps).rounded(.down))
         if h > 0 {
             return String(format: "%02d:%02d:%02d:%02d", h, m, s, frames)
         }

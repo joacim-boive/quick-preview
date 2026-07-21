@@ -12,26 +12,37 @@ enum FCPXMLExporter {
         let safeProjectName = sanitizeName(projectName.isEmpty ? "QuickPreview Export" : projectName)
         let sequenceDuration = items.reduce(0.0) { $0 + $1.clipDuration }
         let primary = items[0]
-        let formatID = "r1"
-        let frameDuration = frameDurationString(for: primary.frameRate)
 
         var resources: [String] = []
-        resources.append(
-            """
-            <format id="\(formatID)" name="FFVideoFormat\(primary.height)p\(Int(primary.frameRate.rounded()))" frameDuration="\(frameDuration)" width="\(primary.width)" height="\(primary.height)"/>
-            """
-        )
+        var formatIDByKey: [String: String] = [:]
+        var nextResourceIndex = 1
+
+        for item in items {
+            let key = formatKey(for: item)
+            guard formatIDByKey[key] == nil else { continue }
+            let formatID = "r\(nextResourceIndex)"
+            nextResourceIndex += 1
+            formatIDByKey[key] = formatID
+            let frameDuration = frameDurationString(for: item.frameRate)
+            resources.append(
+                """
+                <format id="\(formatID)" name="FFVideoFormat\(item.height)p\(Int(item.frameRate.rounded()))" frameDuration="\(frameDuration)" width="\(item.width)" height="\(item.height)"/>
+                """
+            )
+        }
+
+        let sequenceFormatID = formatIDByKey[formatKey(for: primary)] ?? "r1"
 
         var assetIDByPath: [String: String] = [:]
-        var nextAssetIndex = 2
         for item in items {
-            let key = item.videoURL.path
-            if assetIDByPath[key] != nil {
+            let pathKey = item.videoURL.path
+            if assetIDByPath[pathKey] != nil {
                 continue
             }
-            let assetID = "r\(nextAssetIndex)"
-            nextAssetIndex += 1
-            assetIDByPath[key] = assetID
+            let assetID = "r\(nextResourceIndex)"
+            nextResourceIndex += 1
+            assetIDByPath[pathKey] = assetID
+            let formatID = formatIDByKey[formatKey(for: item)] ?? sequenceFormatID
             let src = xmlEscape(item.videoURL.absoluteString)
             let name = xmlEscape((item.videoPath as NSString).lastPathComponent)
             resources.append(
@@ -45,6 +56,7 @@ enum FCPXMLExporter {
         var timelineOffset: PlaybackSeconds = 0
         for item in items {
             let assetID = assetIDByPath[item.videoURL.path] ?? "r2"
+            let frameDuration = frameDurationString(for: item.frameRate)
             let markerXML = item.markers.map { marker in
                 let noteAttr: String
                 if let note = marker.note, !note.isEmpty {
@@ -90,7 +102,7 @@ enum FCPXMLExporter {
             <library>
                 <event name="\(xmlEscape(safeProjectName))">
                     <project name="\(xmlEscape(safeProjectName))">
-                        <sequence format="\(formatID)" duration="\(timeString(sequenceDuration))" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+                        <sequence format="\(sequenceFormatID)" duration="\(timeString(sequenceDuration))" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
                             <spine>
         \(spineBlock)
                             </spine>
@@ -152,6 +164,10 @@ enum FCPXMLExporter {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
+    private static func formatKey(for item: ResolveExportItem) -> String {
+        "\(item.width)x\(item.height)@\(frameDurationString(for: item.frameRate))"
     }
 
     private static func sanitizeName(_ name: String) -> String {

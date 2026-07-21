@@ -11,7 +11,7 @@ struct MediaTiming: Equatable {
 }
 
 protocol MediaTimingProviding {
-    func timing(for url: URL) -> MediaTiming?
+    func timing(for url: URL) async -> MediaTiming?
 }
 
 struct AVAssetMediaTimingProvider: MediaTimingProviding {
@@ -19,15 +19,8 @@ struct AVAssetMediaTimingProvider: MediaTimingProviding {
     static let fallbackWidth = 1920
     static let fallbackHeight = 1080
 
-    func timing(for url: URL) -> MediaTiming? {
-        var result: MediaTiming?
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            result = await Self.loadTiming(for: url)
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return result
+    func timing(for url: URL) async -> MediaTiming? {
+        await Self.loadTiming(for: url)
     }
 
     private static func loadTiming(for url: URL) async -> MediaTiming? {

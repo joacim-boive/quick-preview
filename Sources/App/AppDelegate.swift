@@ -207,18 +207,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             sort: .automatic,
             visibility: protectedBookmarksSessionController.isUnlocked ? .all : .publicOnly
         )
-        let result = ResolveExportBuilder.build(
-            videoPath: range.url.path,
-            clipStart: range.start,
-            clipEnd: range.end,
-            bookmarks: bookmarks,
-            mediaAccessStore: mediaAccessStore
-        )
-        ResolveExportCoordinator.presentSavePanel(
-            for: result,
-            suggestingName: range.url.deletingPathExtension().lastPathComponent,
-            window: controller.window
-        )
+        let mediaAccessStore = self.mediaAccessStore
+        let suggestingName = range.url.deletingPathExtension().lastPathComponent
+        let window = controller.window
+        Task {
+            let result = await ResolveExportBuilder.build(
+                videoPath: range.url.path,
+                clipStart: range.start,
+                clipEnd: range.end,
+                bookmarks: bookmarks,
+                mediaAccessStore: mediaAccessStore
+            )
+            await MainActor.run {
+                ResolveExportCoordinator.presentSavePanel(
+                    for: result,
+                    suggestingName: suggestingName,
+                    window: window
+                )
+            }
+        }
     }
 
     @objc
@@ -534,6 +541,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         controller.onPlayPauseRequested = { [weak self] in
             self?.windowController?.togglePlayPauseIfPossible()
+        }
+        controller.onFlushPersistedClipSelection = { [weak self] in
+            self?.windowController?.flushPersistedStateWrites()
         }
         controller.onWindowClosed = { [weak self] in
             self?.protectedBookmarksSessionController.lock()

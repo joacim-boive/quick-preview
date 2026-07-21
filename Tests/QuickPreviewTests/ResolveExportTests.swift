@@ -6,7 +6,7 @@ private struct StubMediaTimingProvider: MediaTimingProviding {
     var timingsByPath: [String: MediaTiming]
     var missingPaths: Set<String> = []
 
-    func timing(for url: URL) -> MediaTiming? {
+    func timing(for url: URL) async -> MediaTiming? {
         let path = url.quickPreviewNormalizedPath
         if missingPaths.contains(path) {
             return nil
@@ -33,7 +33,7 @@ final class ResolveExportBuilderTests: XCTestCase {
         super.tearDown()
     }
 
-    func testMergesBookmarksOnSameFileIntoOneItem() {
+    func testMergesBookmarksOnSameFileIntoOneItem() async {
         let path = "/tmp/clip_a.mp4"
         let timing = MediaTiming(
             durationSeconds: 20,
@@ -48,7 +48,7 @@ final class ResolveExportBuilderTests: XCTestCase {
             makeBookmark(path: path, time: 5, tags: ["keep", "hero"])
         ]
 
-        let result = ResolveExportBuilder.build(
+        let result = await ResolveExportBuilder.build(
             selectedBookmarks: bookmarks,
             defaults: defaults,
             timingProvider: provider
@@ -64,7 +64,7 @@ final class ResolveExportBuilderTests: XCTestCase {
         XCTAssertEqual(result.items[0].markers[1].note, "hero")
     }
 
-    func testUsesStoredSelectionWhenPresent() {
+    func testUsesStoredSelectionWhenPresent() async {
         let path = "/tmp/clip_b.mp4"
         let timing = MediaTiming(
             durationSeconds: 30,
@@ -78,7 +78,7 @@ final class ResolveExportBuilderTests: XCTestCase {
         let encoded = try! JSONEncoder().encode([path: selection])
         defaults.set(encoded, forKey: ClipSelectionStore.defaultsKey)
 
-        let result = ResolveExportBuilder.build(
+        let result = await ResolveExportBuilder.build(
             selectedBookmarks: [makeBookmark(path: path, time: 4, tags: [])],
             defaults: defaults,
             timingProvider: provider
@@ -89,7 +89,7 @@ final class ResolveExportBuilderTests: XCTestCase {
         XCTAssertEqual(result.items[0].clipEnd, 10)
     }
 
-    func testDropsMarkersOutsideExportedRange() {
+    func testDropsMarkersOutsideExportedRange() async {
         let path = "/tmp/clip_c.mp4"
         let timing = MediaTiming(
             durationSeconds: 40,
@@ -108,7 +108,7 @@ final class ResolveExportBuilderTests: XCTestCase {
             makeBookmark(path: path, time: 16, tags: ["after"])
         ]
 
-        let result = ResolveExportBuilder.build(
+        let result = await ResolveExportBuilder.build(
             selectedBookmarks: bookmarks,
             defaults: defaults,
             timingProvider: provider
@@ -118,11 +118,11 @@ final class ResolveExportBuilderTests: XCTestCase {
         XCTAssertEqual(result.items[0].markers.map(\.name), ["inside"])
     }
 
-    func testSkipsUnreadableMedia() {
+    func testSkipsUnreadableMedia() async {
         let path = "/tmp/missing.mp4"
         let provider = StubMediaTimingProvider(timingsByPath: [:], missingPaths: [path])
 
-        let result = ResolveExportBuilder.build(
+        let result = await ResolveExportBuilder.build(
             selectedBookmarks: [makeBookmark(path: path, time: 1, tags: [])],
             defaults: defaults,
             timingProvider: provider
@@ -132,7 +132,7 @@ final class ResolveExportBuilderTests: XCTestCase {
         XCTAssertEqual(result.skippedPaths, [path])
     }
 
-    func testPlayerOverrideUsesExplicitRange() {
+    func testPlayerOverrideUsesExplicitRange() async {
         let path = "/tmp/clip_d.mp4"
         let timing = MediaTiming(
             durationSeconds: 12,
@@ -143,7 +143,7 @@ final class ResolveExportBuilderTests: XCTestCase {
         )
         let provider = StubMediaTimingProvider(timingsByPath: [path: timing])
 
-        let result = ResolveExportBuilder.build(
+        let result = await ResolveExportBuilder.build(
             videoPath: path,
             clipStart: 1,
             clipEnd: 4,
@@ -156,6 +156,36 @@ final class ResolveExportBuilderTests: XCTestCase {
         XCTAssertEqual(result.items[0].clipStart, 1)
         XCTAssertEqual(result.items[0].clipEnd, 4)
         XCTAssertEqual(result.items[0].markers.count, 1)
+    }
+
+    func testUntaggedMarkerUsesMediaFrameRateForTimecode() async {
+        let path = "/tmp/clip_e.mp4"
+        let timing = MediaTiming(
+            durationSeconds: 10,
+            frameRate: 24,
+            width: 1920,
+            height: 1080,
+            usedFallbackFrameRate: false
+        )
+        let provider = StubMediaTimingProvider(timingsByPath: [path: timing])
+
+        let result = await ResolveExportBuilder.build(
+            selectedBookmarks: [makeBookmark(path: path, time: 1.5, tags: [])],
+            defaults: defaults,
+            timingProvider: provider
+        )
+
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items[0].markers.count, 1)
+        // 1.5s at 24fps → 01:00:12 (mm:ss:ff with 12 frames)
+        XCTAssertEqual(result.items[0].markers[0].name, "00:01:12")
+    }
+
+    func testFormatTimecodeUsesProvidedFrameRate() {
+        XCTAssertEqual(ResolveExportBuilder.formatTimecode(1.5, frameRate: 24), "00:01:12")
+        XCTAssertEqual(ResolveExportBuilder.formatTimecode(1.5, frameRate: 25), "00:01:12")
+        XCTAssertEqual(ResolveExportBuilder.formatTimecode(1.04, frameRate: 25), "00:01:01")
+        XCTAssertEqual(ResolveExportBuilder.formatTimecode(1.04, frameRate: 24), "00:01:00")
     }
 
     private func makeBookmark(path: String, time: PlaybackSeconds, tags: [String]) -> Bookmark {
@@ -197,6 +227,45 @@ final class FCPXMLExporterTests: XCTestCase {
         XCTAssertTrue(xml.contains("value=\"hero\""))
         XCTAssertTrue(xml.contains("note=\"keep\""))
         XCTAssertTrue(xml.contains("name=\"clip a [hero, keep]\""))
+    }
+
+    func testMixedFrameRatesEmitSeparateFormats() throws {
+        let items = [
+            ResolveExportItem(
+                videoPath: "/tmp/a.mp4",
+                clipStart: 0,
+                clipEnd: 2,
+                durationSeconds: 10,
+                frameRate: 24,
+                width: 1280,
+                height: 720,
+                usedFallbackFrameRate: false,
+                tags: [],
+                markers: []
+            ),
+            ResolveExportItem(
+                videoPath: "/tmp/b.mp4",
+                clipStart: 0,
+                clipEnd: 3,
+                durationSeconds: 12,
+                frameRate: 30,
+                width: 1920,
+                height: 1080,
+                usedFallbackFrameRate: false,
+                tags: [],
+                markers: []
+            )
+        ]
+
+        let xml = try FCPXMLExporter.exportXML(items: items, projectName: "Mixed")
+
+        XCTAssertTrue(xml.contains("FFVideoFormat720p24"))
+        XCTAssertTrue(xml.contains("FFVideoFormat1080p30"))
+        XCTAssertTrue(xml.contains("frameDuration=\"1/24s\""))
+        XCTAssertTrue(xml.contains("frameDuration=\"1/30s\""))
+        XCTAssertTrue(xml.contains("format=\"r1\""))
+        XCTAssertTrue(xml.contains("format=\"r2\""))
+        XCTAssertTrue(xml.contains("<sequence format=\"r1\""))
     }
 
     func testEmptyItemsThrow() {
