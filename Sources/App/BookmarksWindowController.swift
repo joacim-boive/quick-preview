@@ -52,6 +52,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private let scopeControl = NSSegmentedControl(labels: ["Current Video", "All Videos", "Imported"], trackingMode: .selectOne, target: nil, action: nil)
     private let modeControl = NSSegmentedControl(labels: ["Bookmarks", "Tags", "Map"], trackingMode: .selectOne, target: nil, action: nil)
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
+    private let exportResolveButton = NSButton(title: "Export to Resolve", target: nil, action: nil)
     private let contentStackView = NSStackView()
     private let tagSelectionRow = NSStackView()
     private let tagSelectionSummaryLabel = NSTextField(labelWithString: "")
@@ -398,10 +399,17 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         importButton.action = #selector(handleImportMedia(_:))
         importButton.bezelStyle = .rounded
 
+        exportResolveButton.translatesAutoresizingMaskIntoConstraints = false
+        exportResolveButton.target = self
+        exportResolveButton.action = #selector(handleExportToResolve(_:))
+        exportResolveButton.bezelStyle = .rounded
+        exportResolveButton.isEnabled = false
+
         controlsRow.addArrangedSubview(searchField)
         controlsRow.addArrangedSubview(scopeControl)
         controlsRow.addArrangedSubview(modeControl)
         controlsRow.addArrangedSubview(importButton)
+        controlsRow.addArrangedSubview(exportResolveButton)
 
         contentStackView.translatesAutoresizingMaskIntoConstraints = false
         contentStackView.orientation = .vertical
@@ -870,6 +878,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         suppressBookmarkOpenOnSelectionChange = false
 
         updateEmptyState()
+        exportResolveButton.isEnabled = !tableView.selectedRowIndexes.isEmpty
     }
 
     private func updateEmptyState() {
@@ -1067,6 +1076,17 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
         menu.addItem(.separator())
 
+        let exportItem = NSMenuItem(
+            title: "Export to Resolve…",
+            action: #selector(handleContextExportToResolve(_:)),
+            keyEquivalent: ""
+        )
+        exportItem.target = self
+        exportItem.isEnabled = hasSelection
+        menu.addItem(exportItem)
+
+        menu.addItem(.separator())
+
         let removeItem = NSMenuItem(
             title: selectedCount > 1 ? "Remove Bookmarks" : "Remove Bookmark",
             action: #selector(handleContextRemoveBookmark(_:)),
@@ -1117,6 +1137,40 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         _ = sender
         suppressBookmarkOpenOnSelectionChange = true
         removeSelectedBookmark()
+    }
+
+    @objc
+    private func handleContextExportToResolve(_ sender: Any?) {
+        _ = sender
+        suppressBookmarkOpenOnSelectionChange = true
+        exportSelectedBookmarksToResolve()
+    }
+
+    @objc
+    private func handleExportToResolve(_ sender: Any?) {
+        _ = sender
+        exportSelectedBookmarksToResolve()
+    }
+
+    private func exportSelectedBookmarksToResolve() {
+        let selected = tableView.selectedRowIndexes.compactMap { row -> Bookmark? in
+            guard row >= 0, row < bookmarks.count else { return nil }
+            return bookmarks[row]
+        }
+        guard !selected.isEmpty else {
+            showInfoAlert(title: "Nothing to Export", message: "Select one or more bookmarks to export.")
+            return
+        }
+
+        let result = ResolveExportBuilder.build(
+            selectedBookmarks: selected,
+            mediaAccessStore: mediaAccessStore
+        )
+        ResolveExportCoordinator.presentSavePanel(
+            for: result,
+            suggestingName: "QuickPreview Export",
+            window: window
+        )
     }
 
     private enum BulkTagEditMode {
@@ -1982,6 +2036,7 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         _ = notification
+        exportResolveButton.isEnabled = !tableView.selectedRowIndexes.isEmpty
         let tagsColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.tags)
         let protectedColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.protected)
         let actionsColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.actions)

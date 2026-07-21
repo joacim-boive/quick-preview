@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let paranoidModeMenuItemTag = 4301
     private let backgroundShortcutMenuItemTag = 4302
     private let accountPortalMenuItemTag = 4303
+    private let exportResolveMenuItemTag = 4304
     private let allowedRotationDegrees = [0, 90, 180, 270]
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -177,6 +178,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             _ = controller.openFinderSelectionIfVideo(showErrors: true)
         }
         _ = sender
+    }
+
+    @objc
+    private func handleExportToResolveFromMenu(_ sender: Any?) {
+        _ = sender
+        requestSubscriptionAccess(showLoadingWindow: false) { [weak self] in
+            self?.exportCurrentClipToResolve()
+        }
+    }
+
+    private func exportCurrentClipToResolve() {
+        let controller = ensureWindowController()
+        guard let range = controller.currentClipExportRange() else {
+            let alert = NSAlert()
+            alert.messageText = "Nothing to Export"
+            alert.informativeText = "Open a clip first, then export it to Resolve."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let bookmarks = bookmarkStore.bookmarks(
+            scope: .currentVideo,
+            currentVideoURL: range.url,
+            searchQuery: "",
+            sort: .automatic,
+            visibility: protectedBookmarksSessionController.isUnlocked ? .all : .publicOnly
+        )
+        let result = ResolveExportBuilder.build(
+            videoPath: range.url.path,
+            clipStart: range.start,
+            clipEnd: range.end,
+            bookmarks: bookmarks,
+            mediaAccessStore: mediaAccessStore
+        )
+        ResolveExportCoordinator.presentSavePanel(
+            for: result,
+            suggestingName: range.url.deletingPathExtension().lastPathComponent,
+            window: controller.window
+        )
     }
 
     @objc
@@ -371,6 +413,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 ? "Subscriber Account..."
                 : "Manage QuickPreview PRO Access..."
             return true
+        case exportResolveMenuItemTag:
+            return isEntitled && controller?.hasLoadedVideo() == true
         default:
             let rotationTagRangeUpperBound = rotationMenuItemBaseTag + 360
             if (rotationMenuItemBaseTag...rotationTagRangeUpperBound).contains(menuItem.tag) {
@@ -597,6 +641,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             openFinderSelectionItem.keyEquivalentModifierMask = [.command, .shift]
             fileMenu.addItem(openFinderSelectionItem)
         }
+
+        fileMenu.addItem(.separator())
+        let exportResolveItem = NSMenuItem(
+            title: "Export to Resolve…",
+            action: #selector(handleExportToResolveFromMenu(_:)),
+            keyEquivalent: "e"
+        )
+        exportResolveItem.target = self
+        exportResolveItem.keyEquivalentModifierMask = [.command, .shift]
+        exportResolveItem.tag = exportResolveMenuItemTag
+        fileMenu.addItem(exportResolveItem)
+
         fileMenuItem.submenu = fileMenu
 
         let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
