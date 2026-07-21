@@ -281,6 +281,25 @@ final class MainPlayerWindowController: NSWindowController, NSWindowDelegate {
         currentVideoURL
     }
 
+    /// Current in/out for Resolve export (falls back to full duration when no selection).
+    func currentClipExportRange() -> (url: URL, start: PlaybackSeconds, end: PlaybackSeconds)? {
+        guard let url = currentVideoURL else {
+            return nil
+        }
+        let duration = max(engine.currentDurationSeconds(), 0)
+        let start = min(max(selectionStart, 0), duration > 0 ? duration : selectionStart)
+        let end: PlaybackSeconds
+        if duration > 0 {
+            end = min(max(selectionEnd, start), duration)
+        } else {
+            end = max(selectionEnd, start)
+        }
+        if end <= start, duration > 0 {
+            return (url, 0, duration)
+        }
+        return (url, start, end)
+    }
+
     func hasLoadedVideo() -> Bool {
         currentVideoURL != nil
     }

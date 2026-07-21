@@ -55,6 +55,11 @@
 		100001000000000000000047 /* MediaLocationResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000224 /* MediaLocationResolver.swift */; };
 		100001000000000000000048 /* MapKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000300000000000000009 /* MapKit.framework */; };
 		100001000000000000000049 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10000030000000000000000A /* CoreLocation.framework */; };
+		100001000000000000000050 /* ClipSelectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000225 /* ClipSelectionStore.swift */; };
+		100001000000000000000051 /* MediaTimingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000226 /* MediaTimingProvider.swift */; };
+		100001000000000000000052 /* ResolveExportBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000227 /* ResolveExportBuilder.swift */; };
+		100001000000000000000053 /* FCPXMLExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000228 /* FCPXMLExporter.swift */; };
+		100001000000000000000054 /* ResolveExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000229 /* ResolveExportCoordinator.swift */; };
 
 		100001000000000000000101 /* AppEditionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000301 /* AppEditionTests.swift */; };
 		100001000000000000000102 /* SubscriptionAccessStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000302 /* SubscriptionAccessStateTests.swift */; };
@@ -69,6 +74,7 @@
 		100001000000000000000111 /* ProEntitlementSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000310 /* ProEntitlementSessionTests.swift */; };
 		100001000000000000000112 /* SecurityScopedMediaAccessStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000311 /* SecurityScopedMediaAccessStoreTests.swift */; };
 		100001000000000000000113 /* MediaLocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000312 /* MediaLocationTests.swift */; };
+		100001000000000000000114 /* ResolveExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000100000000000000313 /* ResolveExportTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -134,6 +140,11 @@
 		100000100000000000000222 /* MediaLocationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLocationStore.swift; sourceTree = "<group>"; };
 		100000100000000000000223 /* MediaLocationExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLocationExtractor.swift; sourceTree = "<group>"; };
 		100000100000000000000224 /* MediaLocationResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLocationResolver.swift; sourceTree = "<group>"; };
+		100000100000000000000225 /* ClipSelectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipSelectionStore.swift; sourceTree = "<group>"; };
+		100000100000000000000226 /* MediaTimingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaTimingProvider.swift; sourceTree = "<group>"; };
+		100000100000000000000227 /* ResolveExportBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveExportBuilder.swift; sourceTree = "<group>"; };
+		100000100000000000000228 /* FCPXMLExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FCPXMLExporter.swift; sourceTree = "<group>"; };
+		100000100000000000000229 /* ResolveExportCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveExportCoordinator.swift; sourceTree = "<group>"; };
 		100000100000000000000201 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
 		100000100000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000100000000000000203 /* quickpreview-guide-infographic.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "quickpreview-guide-infographic.png"; sourceTree = "<group>"; };
@@ -170,6 +181,7 @@
 		100000100000000000000310 /* ProEntitlementSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProEntitlementSessionTests.swift; sourceTree = "<group>"; };
 		100000100000000000000311 /* SecurityScopedMediaAccessStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedMediaAccessStoreTests.swift; sourceTree = "<group>"; };
 		100000100000000000000312 /* MediaLocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLocationTests.swift; sourceTree = "<group>"; };
+		100000100000000000000313 /* ResolveExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveExportTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -246,6 +258,7 @@
 				100000100000000000000310 /* ProEntitlementSessionTests.swift */,
 				100000100000000000000311 /* SecurityScopedMediaAccessStoreTests.swift */,
 				100000100000000000000312 /* MediaLocationTests.swift */,
+				100000100000000000000313 /* ResolveExportTests.swift */,
 			);
 			path = QuickPreviewTests;
 			sourceTree = "<group>";
@@ -275,6 +288,7 @@
 				100000100000000000000012 /* PaywallWindowController.swift */,
 				100000100000000000000013 /* BackgroundShortcutService.swift */,
 				100000100000000000000017 /* FinderSelectionService.swift */,
+				100000100000000000000229 /* ResolveExportCoordinator.swift */,
 				100000100000000000000014 /* LauncherAppDelegate.swift */,
 				100000100000000000000015 /* LauncherMain.swift */,
 			);
@@ -300,6 +314,10 @@
 				100000100000000000000222 /* MediaLocationStore.swift */,
 				100000100000000000000223 /* MediaLocationExtractor.swift */,
 				100000100000000000000224 /* MediaLocationResolver.swift */,
+				100000100000000000000225 /* ClipSelectionStore.swift */,
+				100000100000000000000226 /* MediaTimingProvider.swift */,
+				100000100000000000000227 /* ResolveExportBuilder.swift */,
+				100000100000000000000228 /* FCPXMLExporter.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -487,6 +505,11 @@
 				100001000000000000000045 /* MediaLocationStore.swift in Sources */,
 				100001000000000000000046 /* MediaLocationExtractor.swift in Sources */,
 				100001000000000000000047 /* MediaLocationResolver.swift in Sources */,
+				100001000000000000000050 /* ClipSelectionStore.swift in Sources */,
+				100001000000000000000051 /* MediaTimingProvider.swift in Sources */,
+				100001000000000000000052 /* ResolveExportBuilder.swift in Sources */,
+				100001000000000000000053 /* FCPXMLExporter.swift in Sources */,
+				100001000000000000000054 /* ResolveExportCoordinator.swift in Sources */,
 				100001000000000000000005 /* PlaybackTypes.swift in Sources */,
 				100001000000000000000006 /* PlaybackEngine.swift in Sources */,
 				100001000000000000000007 /* LoopController.swift in Sources */,
@@ -529,6 +552,7 @@
 				100001000000000000000111 /* ProEntitlementSessionTests.swift in Sources */,
 				100001000000000000000112 /* SecurityScopedMediaAccessStoreTests.swift in Sources */,
 				100001000000000000000113 /* MediaLocationTests.swift in Sources */,
+				100001000000000000000114 /* ResolveExportTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
