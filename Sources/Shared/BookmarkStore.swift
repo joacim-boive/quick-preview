@@ -13,6 +13,8 @@ enum BookmarkSort: Equatable {
     case automatic
     case importedAt(ascending: Bool)
     case fileCreatedAt(ascending: Bool)
+    /// Sorted by reverse-geocoded place name (applied by the bookmarks UI via MediaLocationStore).
+    case location(ascending: Bool)
 }
 
 struct Bookmark: Codable, Equatable {
@@ -84,11 +86,15 @@ struct Bookmark: Codable, Equatable {
     }
 
     var videoURL: URL {
-        URL(fileURLWithPath: videoPath)
+        URL(fileURLWithPath: videoPath).quickPreviewNormalizedFileURL
     }
 
     var videoDisplayName: String {
         (videoPath as NSString).lastPathComponent
+    }
+
+    var normalizedVideoPath: String {
+        videoURL.quickPreviewNormalizedPath
     }
 
     var effectiveThumbnailTimeSeconds: PlaybackSeconds {
@@ -328,7 +334,7 @@ final class BookmarkStore {
         tags: [String] = []
     ) -> Bookmark {
         loadCacheIfNeeded()
-        let normalizedURL = videoURL.standardizedFileURL
+        let normalizedURL = videoURL.quickPreviewNormalizedFileURL
         let bookmark = Bookmark(
             id: BookmarkID(),
             videoPath: normalizedURL.path,
@@ -353,10 +359,10 @@ final class BookmarkStore {
         tolerance: PlaybackSeconds = 0.05
     ) -> Bookmark? {
         loadCacheIfNeeded()
-        let path = videoURL.standardizedFileURL.path
+        let path = videoURL.quickPreviewNormalizedPath
         let referenceTime = max(timeSeconds, 0)
         return cache
-            .filter { $0.videoPath == path && abs($0.timeSeconds - referenceTime) <= tolerance }
+            .filter { $0.normalizedVideoPath == path && abs($0.timeSeconds - referenceTime) <= tolerance }
             .min(by: { abs($0.timeSeconds - referenceTime) < abs($1.timeSeconds - referenceTime) })
     }
 
@@ -378,7 +384,7 @@ final class BookmarkStore {
         let existingBookmarksByPath = cache
             .sorted(by: sortComparator(for: .automatic, scope: .allVideos))
             .reduce(into: [String: Bookmark]()) { result, bookmark in
-                result[bookmark.videoPath] = result[bookmark.videoPath] ?? bookmark
+                result[bookmark.normalizedVideoPath] = result[bookmark.normalizedVideoPath] ?? bookmark
             }
 
         var newMedia: [URL] = []
@@ -387,7 +393,7 @@ final class BookmarkStore {
         duplicates.reserveCapacity(deduplicatedURLs.count)
 
         for videoURL in deduplicatedURLs {
-            let normalizedURL = videoURL.standardizedFileURL
+            let normalizedURL = videoURL.quickPreviewNormalizedFileURL
             if let existingBookmark = existingBookmarksByPath[normalizedURL.path] {
                 duplicates.append(
                     ImportedMediaDuplicate(
@@ -468,6 +474,26 @@ final class BookmarkStore {
         return cache.first(where: { $0.id == id })
     }
 
+    /// Prefer an imported bookmark for the path; otherwise the earliest created bookmark.
+    func bestBookmarkForOpening(
+        videoPath: String,
+        visibility: BookmarkVisibility = .all
+    ) -> Bookmark? {
+        loadCacheIfNeeded()
+        let normalizedPath = URL(fileURLWithPath: videoPath).quickPreviewNormalizedPath
+        let matches = filteredBookmarks(cache, visibility: visibility)
+            .filter { $0.normalizedVideoPath == normalizedPath }
+        if let imported = matches.first(where: \.isImported) {
+            return imported
+        }
+        return matches.min(by: { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.timeSeconds < rhs.timeSeconds
+        })
+    }
+
     func updateTags(for id: BookmarkID, tags: [String]) {
         loadCacheIfNeeded()
         guard let index = cache.firstIndex(where: { $0.id == id }) else {
@@ -479,6 +505,64 @@ final class BookmarkStore {
         }
         cache[index] = cache[index].withUpdatedTags(sanitizedTags)
         preparedBookmarks[id] = makePreparedBookmark(for: cache[index])
+        schedulePersist()
+        notifyDidChange()
+    }
+
+    func addTags(to ids: Set<BookmarkID>, tags: [String]) {
+        loadCacheIfNeeded()
+        guard !ids.isEmpty else {
+            return
+        }
+        let tagsToAdd = Self.sanitizedTags(tags)
+        guard !tagsToAdd.isEmpty else {
+            return
+        }
+
+        var didChange = false
+        for index in cache.indices where ids.contains(cache[index].id) {
+            let updatedTags = Self.tagsByAdding(tagsToAdd, to: cache[index].tags)
+            guard cache[index].tags != updatedTags else {
+                continue
+            }
+            let updatedBookmark = cache[index].withUpdatedTags(updatedTags)
+            cache[index] = updatedBookmark
+            preparedBookmarks[updatedBookmark.id] = makePreparedBookmark(for: updatedBookmark)
+            didChange = true
+        }
+
+        guard didChange else {
+            return
+        }
+        schedulePersist()
+        notifyDidChange()
+    }
+
+    func removeTags(from ids: Set<BookmarkID>, tags: [String]) {
+        loadCacheIfNeeded()
+        guard !ids.isEmpty else {
+            return
+        }
+        let tagsToRemove = Self.sanitizedTags(tags)
+        guard !tagsToRemove.isEmpty else {
+            return
+        }
+
+        var didChange = false
+        for index in cache.indices where ids.contains(cache[index].id) {
+            let updatedTags = Self.tagsByRemoving(tagsToRemove, from: cache[index].tags)
+            guard cache[index].tags != updatedTags else {
+                continue
+            }
+            let updatedBookmark = cache[index].withUpdatedTags(updatedTags)
+            cache[index] = updatedBookmark
+            preparedBookmarks[updatedBookmark.id] = makePreparedBookmark(for: updatedBookmark)
+            didChange = true
+        }
+
+        guard didChange else {
+            return
+        }
         schedulePersist()
         notifyDidChange()
     }
@@ -610,6 +694,20 @@ final class BookmarkStore {
         )
     }
 
+    static func tagsByAdding(_ tags: [String], to existing: [String]) -> [String] {
+        sanitizedTags(existing + tags)
+    }
+
+    static func tagsByRemoving(_ tags: [String], from existing: [String]) -> [String] {
+        let normalizedTagsToRemove = Set(sanitizedTags(tags).map(\.localizedLowercase))
+        guard !normalizedTagsToRemove.isEmpty else {
+            return sanitizedTags(existing)
+        }
+        return sanitizedTags(existing).filter { tag in
+            !normalizedTagsToRemove.contains(tag.localizedLowercase)
+        }
+    }
+
     func hasProtectedBookmarks() -> Bool {
         loadCacheIfNeeded()
         return cache.contains(where: \.isProtected)
@@ -617,9 +715,9 @@ final class BookmarkStore {
 
     func hasProtectedBookmarks(for videoURL: URL) -> Bool {
         loadCacheIfNeeded()
-        let normalizedVideoPath = videoURL.standardizedFileURL.path
+        let normalizedVideoPath = videoURL.quickPreviewNormalizedPath
         return cache.contains { bookmark in
-            bookmark.isProtected && bookmark.videoPath == normalizedVideoPath
+            bookmark.isProtected && bookmark.normalizedVideoPath == normalizedVideoPath
         }
     }
 
@@ -655,7 +753,7 @@ final class BookmarkStore {
         searchQuery: String,
         visibility: BookmarkVisibility
     ) -> [Bookmark] {
-        let normalizedVideoPath = currentVideoURL?.standardizedFileURL.path
+        let normalizedVideoPath = currentVideoURL?.quickPreviewNormalizedPath
         let queryTokens = normalizedSearchTokens(from: searchQuery)
         var results: [Bookmark] = []
         results.reserveCapacity(cache.count)
@@ -748,7 +846,7 @@ final class BookmarkStore {
         switch scope {
         case .currentVideo:
             guard let normalizedVideoPath else { return false }
-            return bookmark.videoPath == normalizedVideoPath
+            return bookmark.normalizedVideoPath == normalizedVideoPath
         case .allVideos:
             return true
         case .imported:
@@ -794,7 +892,7 @@ final class BookmarkStore {
     }
 
     private func makeImportedBookmark(for videoURL: URL, importedAt: Date) -> Bookmark {
-        let normalizedURL = videoURL.standardizedFileURL
+        let normalizedURL = videoURL.quickPreviewNormalizedFileURL
         return Bookmark(
             id: BookmarkID(),
             videoPath: normalizedURL.path,
@@ -811,7 +909,7 @@ final class BookmarkStore {
     }
 
     private func importedMediaReplacementBookmark(from bookmark: Bookmark, importedAt: Date) -> Bookmark {
-        let videoURL = bookmark.videoURL.standardizedFileURL
+        let videoURL = bookmark.videoURL.quickPreviewNormalizedFileURL
         return Bookmark(
             id: bookmark.id,
             videoPath: videoURL.path,
@@ -838,7 +936,8 @@ final class BookmarkStore {
 
     private func sortComparator(for sort: BookmarkSort, scope: BookmarkListScope) -> (Bookmark, Bookmark) -> Bool {
         switch sort {
-        case .automatic:
+        case .automatic, .location:
+            // Location ordering is applied by BookmarksWindowController using MediaLocationStore.
             return automaticSortComparator(for: scope)
         case let .importedAt(ascending):
             return dateComparator(\.importedAt, ascending: ascending)
@@ -894,7 +993,7 @@ final class BookmarkStore {
     private static func deduplicatedVideoURLs(_ videoURLs: [URL]) -> [URL] {
         var seenPaths = Set<String>()
         return videoURLs.reduce(into: [URL]()) { result, rawURL in
-            let normalizedURL = rawURL.standardizedFileURL
+            let normalizedURL = rawURL.quickPreviewNormalizedFileURL
             guard seenPaths.insert(normalizedURL.path).inserted else {
                 return
             }

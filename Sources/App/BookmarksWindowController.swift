@@ -1,6 +1,7 @@
 import AVFoundation
 import AVKit
 import Cocoa
+import MapKit
 import UniformTypeIdentifiers
 
 final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
@@ -11,12 +12,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private enum DisplayMode: Int {
         case bookmarks
         case tagBrowser
+        case map
     }
 
     private enum ColumnIdentifier {
         static let thumbnail = NSUserInterfaceItemIdentifier("thumbnail")
         static let time = NSUserInterfaceItemIdentifier("time")
         static let filename = NSUserInterfaceItemIdentifier("filename")
+        static let location = NSUserInterfaceItemIdentifier("location")
         static let importedDate = NSUserInterfaceItemIdentifier("importedDate")
         static let fileCreatedDate = NSUserInterfaceItemIdentifier("fileCreatedDate")
         static let protected = NSUserInterfaceItemIdentifier("protected")
@@ -28,6 +31,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private enum SortDescriptorKey {
         static let importedAt = "importedAt"
         static let fileCreatedAt = "fileCreatedAt"
+        static let location = "location"
     }
 
     private enum ImportedMediaDuplicatePromptAction {
@@ -40,15 +44,21 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     private let bookmarkStore: BookmarkStore
     private let thumbnailService: VideoThumbnailService
+    private let mediaAccessStore: SecurityScopedMediaAccessStore
+    private let mediaLocationStore: MediaLocationStore
+    private let mediaLocationResolver: MediaLocationResolver
     private let protectedBookmarksSessionController: ProtectedBookmarksSessionController
     private let searchField = NSSearchField(frame: .zero)
     private let scopeControl = NSSegmentedControl(labels: ["Current Video", "All Videos", "Imported"], trackingMode: .selectOne, target: nil, action: nil)
-    private let modeControl = NSSegmentedControl(labels: ["Bookmarks", "Tags"], trackingMode: .selectOne, target: nil, action: nil)
+    private let modeControl = NSSegmentedControl(labels: ["Bookmarks", "Tags", "Map"], trackingMode: .selectOne, target: nil, action: nil)
     private let importButton = NSButton(title: "Import", target: nil, action: nil)
     private let contentStackView = NSStackView()
     private let tagSelectionRow = NSStackView()
     private let tagSelectionSummaryLabel = NSTextField(labelWithString: "")
     private let clearTagSelectionButton = NSButton(title: "Clear Selection", target: nil, action: nil)
+    private let locationFilterRow = NSStackView()
+    private let locationFilterLabel = NSTextField(labelWithString: "")
+    private let clearLocationFilterButton = NSButton(title: "Clear Location", target: nil, action: nil)
     private let tagCloudContainerView = NSView(frame: .zero)
     private let tagCloudScrollView = NSScrollView(frame: .zero)
     private let tagCloudCollectionView: NSCollectionView = {
@@ -65,10 +75,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private let matchingClipsCountLabel = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView(frame: .zero)
     private let tableView = BookmarkTableView(frame: .zero)
+    private let mapContainerView = NSView(frame: .zero)
+    private let mapView = MKMapView(frame: .zero)
+    private let mapEmptyStateLabel = NSTextField(labelWithString: "No locations yet.")
     private let emptyStateLabel = NSTextField(labelWithString: "No bookmarks yet.")
     private var escMonitor: Any?
     private var bookmarkNavigationMonitor: Any?
     private var bookmarkChangeObserver: NSObjectProtocol?
+    private var mediaLocationChangeObserver: NSObjectProtocol?
     private var protectedSessionObserver: NSObjectProtocol?
     private var tagCloudHeightConstraint: NSLayoutConstraint?
     private var bookmarks: [Bookmark] = []
@@ -79,7 +93,11 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     private var currentSort: BookmarkSort = .automatic
     private var currentDisplayMode: DisplayMode = .bookmarks
     private var suppressBookmarkOpenOnSelectionChange = false
+    private var suppressMapSelectionOpen = false
+    private var locationFilterVideoPaths: Set<String>?
+    private var locationFilterPlaceName: String?
     private weak var activePreviewThumbnailCell: BookmarkThumbnailCellView?
+    private weak var activeMapMarkerPreview: MediaLocationMapMarkerView?
     private var activeThumbnailPickerSheetController: BookmarkThumbnailPickerSheetController?
     private var pendingRevealHighlightBookmarkID: BookmarkID?
     private var isPreparingForApplicationTermination = false
@@ -125,10 +143,16 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     init(
         bookmarkStore: BookmarkStore,
         thumbnailService: VideoThumbnailService,
+        mediaAccessStore: SecurityScopedMediaAccessStore,
+        mediaLocationStore: MediaLocationStore,
+        mediaLocationResolver: MediaLocationResolver,
         protectedBookmarksSessionController: ProtectedBookmarksSessionController
     ) {
         self.bookmarkStore = bookmarkStore
         self.thumbnailService = thumbnailService
+        self.mediaAccessStore = mediaAccessStore
+        self.mediaLocationStore = mediaLocationStore
+        self.mediaLocationResolver = mediaLocationResolver
         self.protectedBookmarksSessionController = protectedBookmarksSessionController
         let rootView = BookmarkDropView(frame: NSRect(x: 0, y: 0, width: 1080, height: 560))
         let window = NSWindow(
@@ -167,6 +191,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         if let bookmarkChangeObserver {
             NotificationCenter.default.removeObserver(bookmarkChangeObserver)
         }
+        if let mediaLocationChangeObserver {
+            NotificationCenter.default.removeObserver(mediaLocationChangeObserver)
+        }
         if let protectedSessionObserver {
             NotificationCenter.default.removeObserver(protectedSessionObserver)
         }
@@ -182,6 +209,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func navigateSelection(delta: Int) {
+        guard currentDisplayMode != .map else {
+            return
+        }
         guard
             delta != 0,
             !bookmarks.isEmpty,
@@ -377,6 +407,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         contentStackView.orientation = .vertical
         contentStackView.alignment = .leading
         contentStackView.spacing = 12
+        contentStackView.distribution = .fill
 
         tagSelectionRow.translatesAutoresizingMaskIntoConstraints = false
         tagSelectionRow.orientation = .horizontal
@@ -394,6 +425,25 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
         tagSelectionRow.addArrangedSubview(tagSelectionSummaryLabel)
         tagSelectionRow.addArrangedSubview(clearTagSelectionButton)
+
+        locationFilterRow.translatesAutoresizingMaskIntoConstraints = false
+        locationFilterRow.orientation = .horizontal
+        locationFilterRow.alignment = .centerY
+        locationFilterRow.spacing = 10
+        locationFilterRow.isHidden = true
+
+        locationFilterLabel.translatesAutoresizingMaskIntoConstraints = false
+        locationFilterLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        locationFilterLabel.lineBreakMode = .byTruncatingTail
+        locationFilterLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        clearLocationFilterButton.translatesAutoresizingMaskIntoConstraints = false
+        clearLocationFilterButton.target = self
+        clearLocationFilterButton.action = #selector(handleClearLocationFilter(_:))
+        clearLocationFilterButton.bezelStyle = .rounded
+
+        locationFilterRow.addArrangedSubview(locationFilterLabel)
+        locationFilterRow.addArrangedSubview(clearLocationFilterButton)
 
         tagCloudContainerView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -454,6 +504,12 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tableView.onScrollWheel = { [weak self] in
             self?.refreshHoveredThumbnailPreview()
         }
+        tableView.willSelectRowForContextMenu = { [weak self] in
+            self?.suppressBookmarkOpenOnSelectionChange = true
+        }
+        tableView.prepareContextMenu = { [weak self] row in
+            self?.makeBookmarkContextMenu(forRow: row)
+        }
 
         let thumbnailColumn = NSTableColumn(identifier: ColumnIdentifier.thumbnail)
         thumbnailColumn.title = "Bookmark"
@@ -471,8 +527,18 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         let filenameColumn = NSTableColumn(identifier: ColumnIdentifier.filename)
         filenameColumn.title = "Filename"
         filenameColumn.minWidth = 180
-        filenameColumn.width = 280
+        filenameColumn.width = 220
         filenameColumn.resizingMask = .autoresizingMask
+
+        let locationColumn = NSTableColumn(identifier: ColumnIdentifier.location)
+        locationColumn.title = "Location"
+        locationColumn.minWidth = 120
+        locationColumn.width = 160
+        locationColumn.resizingMask = []
+        locationColumn.sortDescriptorPrototype = NSSortDescriptor(
+            key: SortDescriptorKey.location,
+            ascending: true
+        )
 
         let importedDateColumn = NSTableColumn(identifier: ColumnIdentifier.importedDate)
         importedDateColumn.title = "Imported Date"
@@ -528,6 +594,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tableView.addTableColumn(thumbnailColumn)
         tableView.addTableColumn(timeColumn)
         tableView.addTableColumn(filenameColumn)
+        tableView.addTableColumn(locationColumn)
         tableView.addTableColumn(importedDateColumn)
         tableView.addTableColumn(fileCreatedDateColumn)
         tableView.addTableColumn(protectedColumn)
@@ -535,6 +602,23 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         tableView.addTableColumn(actionsColumn)
         tableView.addTableColumn(removeColumn)
         scrollView.documentView = tableView
+
+        mapContainerView.translatesAutoresizingMaskIntoConstraints = false
+        mapContainerView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        mapContainerView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        mapView.translatesAutoresizingMaskIntoConstraints = false
+        mapView.delegate = self
+        mapView.showsCompass = true
+        mapView.showsZoomControls = true
+
+        mapEmptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
+        mapEmptyStateLabel.alignment = .center
+        mapEmptyStateLabel.textColor = .secondaryLabelColor
+        mapEmptyStateLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        mapEmptyStateLabel.isHidden = true
+
+        mapContainerView.addSubview(mapView)
+        mapContainerView.addSubview(mapEmptyStateLabel)
 
         emptyStateLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyStateLabel.alignment = .center
@@ -545,10 +629,12 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         contentView.addSubview(contentStackView)
         contentView.addSubview(emptyStateLabel)
 
+        contentStackView.addArrangedSubview(locationFilterRow)
         contentStackView.addArrangedSubview(tagSelectionRow)
         contentStackView.addArrangedSubview(tagCloudContainerView)
         contentStackView.addArrangedSubview(matchingClipsCountLabel)
         contentStackView.addArrangedSubview(scrollView)
+        contentStackView.addArrangedSubview(mapContainerView)
 
         NSLayoutConstraint.activate([
             controlsRow.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 14),
@@ -562,10 +648,13 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             contentStackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
             contentStackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
 
+            locationFilterRow.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
             tagSelectionRow.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
             tagCloudContainerView.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
             matchingClipsCountLabel.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
             scrollView.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
+            mapContainerView.widthAnchor.constraint(equalTo: contentStackView.widthAnchor),
+            mapContainerView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280),
 
             tagCloudScrollView.topAnchor.constraint(equalTo: tagCloudContainerView.topAnchor),
             tagCloudScrollView.leadingAnchor.constraint(equalTo: tagCloudContainerView.leadingAnchor),
@@ -576,6 +665,16 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             tagCloudEmptyStateLabel.centerYAnchor.constraint(equalTo: tagCloudContainerView.centerYAnchor),
             tagCloudEmptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: tagCloudContainerView.leadingAnchor, constant: 16),
             tagCloudEmptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: tagCloudContainerView.trailingAnchor, constant: -16),
+
+            mapView.topAnchor.constraint(equalTo: mapContainerView.topAnchor),
+            mapView.leadingAnchor.constraint(equalTo: mapContainerView.leadingAnchor),
+            mapView.trailingAnchor.constraint(equalTo: mapContainerView.trailingAnchor),
+            mapView.bottomAnchor.constraint(equalTo: mapContainerView.bottomAnchor),
+
+            mapEmptyStateLabel.centerXAnchor.constraint(equalTo: mapContainerView.centerXAnchor),
+            mapEmptyStateLabel.centerYAnchor.constraint(equalTo: mapContainerView.centerYAnchor),
+            mapEmptyStateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: mapContainerView.leadingAnchor, constant: 20),
+            mapEmptyStateLabel.trailingAnchor.constraint(lessThanOrEqualTo: mapContainerView.trailingAnchor, constant: -20),
 
             emptyStateLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
             emptyStateLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
@@ -600,6 +699,14 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.reloadBookmarks()
+        }
+
+        mediaLocationChangeObserver = NotificationCenter.default.addObserver(
+            forName: .mediaLocationStoreDidChange,
+            object: mediaLocationStore,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleMediaLocationStoreDidChange()
         }
 
         protectedSessionObserver = NotificationCenter.default.addObserver(
@@ -686,7 +793,9 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
         let searchQuery = searchField.stringValue
         let visibility = bookmarkVisibility
-        if currentDisplayMode == .tagBrowser {
+        let storeSort = bookmarkSortForStore
+        switch currentDisplayMode {
+        case .tagBrowser:
             tagCounts = bookmarkStore.tagCounts(
                 selectedTags: selectedTags,
                 scope: currentScope,
@@ -694,30 +803,49 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
                 searchQuery: searchQuery,
                 visibility: visibility
             )
-            bookmarks = bookmarkStore.bookmarksMatchingSelectedTags(
-                selectedTags,
-                scope: currentScope,
-                currentVideoURL: currentVideoURL,
-                searchQuery: searchQuery,
-                sort: currentSort,
-                visibility: visibility
+            bookmarks = applyLocationFilters(
+                bookmarkStore.bookmarksMatchingSelectedTags(
+                    selectedTags,
+                    scope: currentScope,
+                    currentVideoURL: currentVideoURL,
+                    searchQuery: searchQuery,
+                    sort: storeSort,
+                    visibility: visibility
+                )
             )
             updateTagSelectionSummary()
             updateMatchingClipsCount()
             tagCloudCollectionView.reloadData()
             tagCloudCollectionView.layoutSubtreeIfNeeded()
             updateTagCloudHeight()
-        } else {
+        case .bookmarks:
             tagCounts = []
-            bookmarks = bookmarkStore.bookmarks(
-                scope: currentScope,
-                currentVideoURL: currentVideoURL,
-                searchQuery: searchQuery,
-                sort: currentSort,
-                visibility: visibility
+            bookmarks = applyLocationFilters(
+                bookmarkStore.bookmarks(
+                    scope: currentScope,
+                    currentVideoURL: currentVideoURL,
+                    searchQuery: searchQuery,
+                    sort: storeSort,
+                    visibility: visibility
+                )
             )
             updateTagCloudHeight()
+        case .map:
+            tagCounts = []
+            bookmarks = applyLocationFilters(
+                bookmarkStore.bookmarks(
+                    scope: currentScope,
+                    currentVideoURL: currentVideoURL,
+                    searchQuery: searchQuery,
+                    sort: storeSort,
+                    visibility: visibility
+                )
+            )
+            updateTagCloudHeight()
+            resolveLocationsForCurrentBookmarks()
+            refreshMapAnnotations()
         }
+        updateLocationFilterSummary()
 
         suppressBookmarkOpenOnSelectionChange = true
         tableView.reloadData()
@@ -776,12 +904,25 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             } else {
                 message = "No clips match the selected tags."
             }
+        case .map:
+            message = "No locations yet."
         }
         emptyStateLabel.stringValue = message
         let isEmpty = bookmarks.isEmpty
-        emptyStateLabel.isHidden = !isEmpty
+        let isMapMode = currentDisplayMode == .map
+        emptyStateLabel.isHidden = isMapMode || !isEmpty
         scrollView.alphaValue = isEmpty ? 0.78 : 1
         tagCloudEmptyStateLabel.isHidden = currentDisplayMode != .tagBrowser || !tagCounts.isEmpty
+        if isMapMode {
+            let hasPins = !mapView.annotations.isEmpty
+            mapEmptyStateLabel.stringValue = bookmarks.isEmpty
+                ? "No clips in the current scope."
+                : "No locations yet."
+            mapEmptyStateLabel.isHidden = hasPins
+            mapView.alphaValue = hasPins ? 1 : 0.78
+        } else {
+            mapEmptyStateLabel.isHidden = true
+        }
     }
 
     private func openSelectedBookmark() {
@@ -830,17 +971,221 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         guard let bookmark = bookmarkStore.bookmark(for: bookmarkID) else {
             return
         }
+        revealBookmarksInFinder([bookmark])
+    }
 
-        let videoURL = bookmark.videoURL.standardizedFileURL
-        guard FileManager.default.fileExists(atPath: videoURL.path) else {
-            showInfoAlert(
-                title: "File Not Found",
-                message: "\"\(bookmark.videoDisplayName)\" is no longer available at its saved location."
-            )
+    private func revealSelectedBookmarksInFinder() {
+        let selectedBookmarks = tableView.selectedRowIndexes.compactMap { row -> Bookmark? in
+            guard row >= 0, row < bookmarks.count else {
+                return nil
+            }
+            return bookmarks[row]
+        }
+        revealBookmarksInFinder(selectedBookmarks)
+    }
+
+    private func revealBookmarksInFinder(_ bookmarks: [Bookmark]) {
+        guard !bookmarks.isEmpty else {
             return
         }
 
-        NSWorkspace.shared.activateFileViewerSelecting([videoURL])
+        var seenPaths = Set<String>()
+        let existingURLs = bookmarks.compactMap { bookmark -> URL? in
+            let videoURL = bookmark.videoURL.standardizedFileURL
+            guard FileManager.default.fileExists(atPath: videoURL.path) else {
+                return nil
+            }
+            guard seenPaths.insert(videoURL.path).inserted else {
+                return nil
+            }
+            return videoURL
+        }
+
+        guard !existingURLs.isEmpty else {
+            if bookmarks.count == 1 {
+                showInfoAlert(
+                    title: "File Not Found",
+                    message: "\"\(bookmarks[0].videoDisplayName)\" is no longer available at its saved location."
+                )
+            } else {
+                showInfoAlert(
+                    title: "Files Not Found",
+                    message: "The selected bookmark files are no longer available at their saved locations."
+                )
+            }
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting(existingURLs)
+    }
+
+    private func makeBookmarkContextMenu(forRow row: Int) -> NSMenu? {
+        guard row >= 0, row < bookmarks.count else {
+            return nil
+        }
+
+        let selectedCount = tableView.selectedRowIndexes.count
+        let menu = NSMenu(title: "Bookmark")
+
+        let showInFinderItem = NSMenuItem(
+            title: "Show in Finder",
+            action: #selector(handleContextShowInFinder(_:)),
+            keyEquivalent: ""
+        )
+        showInFinderItem.target = self
+        menu.addItem(showInFinderItem)
+
+        let selectThumbnailItem = NSMenuItem(
+            title: "Select Thumbnail Frame...",
+            action: #selector(handleContextSelectThumbnailFrame(_:)),
+            keyEquivalent: ""
+        )
+        selectThumbnailItem.target = self
+        selectThumbnailItem.isEnabled = selectedCount == 1
+        menu.addItem(selectThumbnailItem)
+
+        menu.addItem(.separator())
+
+        let hasSelection = selectedCount >= 1
+        let addTagsItem = NSMenuItem(
+            title: "Add Tags…",
+            action: #selector(handleContextAddTags(_:)),
+            keyEquivalent: ""
+        )
+        addTagsItem.target = self
+        addTagsItem.isEnabled = hasSelection
+        menu.addItem(addTagsItem)
+
+        let removeTagsItem = NSMenuItem(
+            title: "Remove Tags…",
+            action: #selector(handleContextRemoveTags(_:)),
+            keyEquivalent: ""
+        )
+        removeTagsItem.target = self
+        removeTagsItem.isEnabled = hasSelection
+        menu.addItem(removeTagsItem)
+
+        menu.addItem(.separator())
+
+        let removeItem = NSMenuItem(
+            title: selectedCount > 1 ? "Remove Bookmarks" : "Remove Bookmark",
+            action: #selector(handleContextRemoveBookmark(_:)),
+            keyEquivalent: ""
+        )
+        removeItem.target = self
+        menu.addItem(removeItem)
+
+        return menu
+    }
+
+    @objc
+    private func handleContextShowInFinder(_ sender: Any?) {
+        _ = sender
+        suppressBookmarkOpenOnSelectionChange = true
+        revealSelectedBookmarksInFinder()
+    }
+
+    @objc
+    private func handleContextSelectThumbnailFrame(_ sender: Any?) {
+        _ = sender
+        guard tableView.selectedRowIndexes.count == 1,
+              let selectedRow = tableView.selectedRowIndexes.first,
+              selectedRow >= 0,
+              selectedRow < bookmarks.count else {
+            return
+        }
+        suppressBookmarkOpenOnSelectionChange = true
+        selectThumbnailFrame(for: bookmarks[selectedRow].id)
+    }
+
+    @objc
+    private func handleContextAddTags(_ sender: Any?) {
+        _ = sender
+        suppressBookmarkOpenOnSelectionChange = true
+        presentBulkTagEditSheet(mode: .add)
+    }
+
+    @objc
+    private func handleContextRemoveTags(_ sender: Any?) {
+        _ = sender
+        suppressBookmarkOpenOnSelectionChange = true
+        presentBulkTagEditSheet(mode: .remove)
+    }
+
+    @objc
+    private func handleContextRemoveBookmark(_ sender: Any?) {
+        _ = sender
+        suppressBookmarkOpenOnSelectionChange = true
+        removeSelectedBookmark()
+    }
+
+    private enum BulkTagEditMode {
+        case add
+        case remove
+    }
+
+    private func selectedBookmarkIDsFromTable() -> Set<BookmarkID> {
+        Set(tableView.selectedRowIndexes.compactMap { row in
+            guard row >= 0, row < bookmarks.count else {
+                return nil
+            }
+            return bookmarks[row].id
+        })
+    }
+
+    private func presentBulkTagEditSheet(mode: BulkTagEditMode) {
+        let selectedIDs = selectedBookmarkIDsFromTable()
+        guard !selectedIDs.isEmpty else {
+            return
+        }
+
+        let alert = NSAlert()
+        let bookmarkCount = selectedIDs.count
+        let bookmarkNoun = bookmarkCount == 1 ? "bookmark" : "bookmarks"
+
+        switch mode {
+        case .add:
+            alert.messageText = "Add Tags"
+            alert.informativeText =
+                "Add tags to \(bookmarkCount) \(bookmarkNoun). Separate tags with commas. Tags already present on a bookmark will be skipped."
+        case .remove:
+            alert.messageText = "Remove Tags"
+            alert.informativeText =
+                "Remove tags from \(bookmarkCount) \(bookmarkNoun). Separate tags with commas. Tags that a bookmark does not have will be ignored."
+        }
+
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: mode == .add ? "Add" : "Remove")
+        alert.addButton(withTitle: "Cancel")
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        textField.placeholderString = "tag1, tag2"
+        textField.stringValue = ""
+        alert.accessoryView = textField
+
+        let response: NSApplication.ModalResponse
+        if let window {
+            window.makeKeyAndOrderFront(nil)
+            response = alert.runModal()
+        } else {
+            response = alert.runModal()
+        }
+
+        guard response == .alertFirstButtonReturn else {
+            return
+        }
+
+        let tags = BookmarkStore.tags(from: textField.stringValue)
+        guard !tags.isEmpty else {
+            return
+        }
+
+        switch mode {
+        case .add:
+            bookmarkStore.addTags(to: selectedIDs, tags: tags)
+        case .remove:
+            bookmarkStore.removeTags(from: selectedIDs, tags: tags)
+        }
     }
 
     private func presentThumbnailPicker(for bookmark: Bookmark) {
@@ -858,7 +1203,8 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
         activeThumbnailPickerSheetController = nil
 
         let sheetController = BookmarkThumbnailPickerSheetController(
-            bookmark: bookmark
+            bookmark: bookmark,
+            mediaAccessStore: mediaAccessStore
         )
         sheetController.onSave = { [weak self] bookmarkID, selectedTimeSeconds, originalBookmarkTimeSeconds in
             let normalizedTimeSeconds: PlaybackSeconds? =
@@ -936,14 +1282,17 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func importMedia(from urls: [URL]) {
-        let validVideoURLs = urls
+        let candidateURLs = urls
             .filter(\.isFileURL)
-            .map(\.standardizedFileURL)
             .filter(isVideoURL(_:))
-        guard !validVideoURLs.isEmpty else {
+        guard !candidateURLs.isEmpty else {
             return
         }
 
+        // Register from the original panel/drop URLs so sandbox access can be persisted.
+        mediaAccessStore.register(urls: candidateURLs)
+
+        let validVideoURLs = candidateURLs.map(\.quickPreviewNormalizedFileURL)
         let importPlan = bookmarkStore.prepareImportedMediaImport(videoURLs: validVideoURLs)
         guard !importPlan.isEmpty else {
             return
@@ -972,6 +1321,10 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
         currentScope = importPlan.duplicates.isEmpty ? .imported : .allVideos
         scopeControl.selectedSegment = currentScope.rawValue
+        let importedPaths = importResult.affectedBookmarkIDs.compactMap { id in
+            bookmarkStore.bookmark(for: id)?.normalizedVideoPath
+        }
+        mediaLocationResolver.resolve(paths: importedPaths)
         reloadBookmarks(selecting: selectedBookmarkID)
     }
 
@@ -1156,9 +1509,25 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
             return .importedAt(ascending: sortDescriptor.ascending)
         case SortDescriptorKey.fileCreatedAt:
             return .fileCreatedAt(ascending: sortDescriptor.ascending)
+        case SortDescriptorKey.location:
+            return .location(ascending: sortDescriptor.ascending)
         default:
             return .automatic
         }
+    }
+
+    private var bookmarkSortForStore: BookmarkSort {
+        if case .location = currentSort {
+            return .automatic
+        }
+        return currentSort
+    }
+
+    private func applyLocationSortIfNeeded(_ bookmarks: [Bookmark]) -> [Bookmark] {
+        guard case let .location(ascending) = currentSort else {
+            return bookmarks
+        }
+        return mediaLocationStore.sortedByPlaceName(bookmarks, ascending: ascending)
     }
 
     private var bookmarkVisibility: BookmarkVisibility {
@@ -1197,11 +1566,210 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     private func refreshDisplayModeUI() {
         let isTagBrowser = currentDisplayMode == .tagBrowser
+        let isMapMode = currentDisplayMode == .map
         modeControl.selectedSegment = currentDisplayMode.rawValue
+        locationFilterRow.isHidden = locationFilterVideoPaths == nil
         tagSelectionRow.isHidden = !isTagBrowser
         tagCloudContainerView.isHidden = !isTagBrowser
         matchingClipsCountLabel.isHidden = !isTagBrowser
+        scrollView.isHidden = isMapMode
+        mapContainerView.isHidden = !isMapMode
         updateTagCloudHeight()
+    }
+
+    private func resolveLocationsForCurrentBookmarks() {
+        let paths = bookmarks.map(\.normalizedVideoPath)
+        mediaLocationResolver.resolve(paths: paths)
+    }
+
+    private func handleMediaLocationStoreDidChange() {
+        if currentDisplayMode == .map {
+            refreshMapAnnotations()
+            updateEmptyState()
+            return
+        }
+        if case .location = currentSort {
+            reloadBookmarks()
+            return
+        }
+        let locationColumnIndex = tableView.column(withIdentifier: ColumnIdentifier.location)
+        guard locationColumnIndex >= 0, tableView.numberOfRows > 0 else {
+            return
+        }
+        let rows = IndexSet(integersIn: 0..<tableView.numberOfRows)
+        tableView.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: locationColumnIndex))
+    }
+
+    private func refreshMapAnnotations() {
+        dismissMapMarkerPreviews()
+        suppressMapSelectionOpen = true
+        mapView.removeAnnotations(mapView.annotations.filter { !($0 is MKUserLocation) })
+
+        var annotationsByPath: [String: MediaLocationMapAnnotation] = [:]
+        for bookmark in bookmarks {
+            let path = bookmark.normalizedVideoPath
+            guard annotationsByPath[path] == nil else {
+                continue
+            }
+            guard
+                let record = mediaLocationStore.location(forPath: path),
+                let latitude = record.latitude,
+                let longitude = record.longitude
+            else {
+                continue
+            }
+
+            let filename = bookmark.videoDisplayName
+            let placeName = record.placeName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let annotation = MediaLocationMapAnnotation(
+                videoPath: path,
+                bookmarkID: bookmark.id,
+                thumbnailTimeSeconds: bookmark.effectiveThumbnailTimeSeconds,
+                coordinate: Self.displayCoordinate(
+                    latitude: latitude,
+                    longitude: longitude,
+                    videoPath: path
+                ),
+                title: (placeName?.isEmpty == false) ? placeName : filename,
+                subtitle: (placeName?.isEmpty == false) ? filename : nil
+            )
+            annotationsByPath[path] = annotation
+        }
+
+        let annotations = Array(annotationsByPath.values)
+        mapView.addAnnotations(annotations)
+        fitMapToAnnotations(annotations, animated: false)
+        suppressMapSelectionOpen = false
+    }
+
+    /// Slight deterministic offset so identical GPS points can separate when zoomed in.
+    private static func displayCoordinate(
+        latitude: Double,
+        longitude: Double,
+        videoPath: String
+    ) -> CLLocationCoordinate2D {
+        var hasher = Hasher()
+        hasher.combine(videoPath)
+        let hash = abs(hasher.finalize())
+        let latOffset = Double((hash % 17) - 8) * 0.000025
+        let lonOffset = Double(((hash / 17) % 17) - 8) * 0.000025
+        return CLLocationCoordinate2D(
+            latitude: latitude + latOffset,
+            longitude: longitude + lonOffset
+        )
+    }
+
+    private func fitMapToAnnotations(
+        _ annotations: [MediaLocationMapAnnotation],
+        animated: Bool
+    ) {
+        guard !annotations.isEmpty else {
+            return
+        }
+        if annotations.count == 1, let annotation = annotations.first {
+            let region = MKCoordinateRegion(
+                center: annotation.coordinate,
+                latitudinalMeters: 8_000,
+                longitudinalMeters: 8_000
+            )
+            mapView.setRegion(region, animated: animated)
+            return
+        }
+
+        var zoomRect = MKMapRect.null
+        for annotation in annotations {
+            let point = MKMapPoint(annotation.coordinate)
+            let rect = MKMapRect(x: point.x, y: point.y, width: 0.1, height: 0.1)
+            zoomRect = zoomRect.union(rect)
+        }
+        mapView.setVisibleMapRect(
+            zoomRect,
+            edgePadding: NSEdgeInsets(top: 48, left: 48, bottom: 48, right: 48),
+            animated: animated
+        )
+    }
+
+    private func handleClusterSelection(_ cluster: MKClusterAnnotation) {
+        let members = cluster.memberAnnotations.compactMap { $0 as? MediaLocationMapAnnotation }
+        guard !members.isEmpty else {
+            return
+        }
+        mapView.deselectAnnotation(cluster, animated: false)
+        applyLocationFilter(from: members)
+    }
+
+    private func applyLocationFilter(from members: [MediaLocationMapAnnotation]) {
+        locationFilterVideoPaths = Set(members.map(\.videoPath))
+        locationFilterPlaceName = sharedPlaceTitle(for: members)
+        if currentScope == .currentVideo {
+            currentScope = .allVideos
+            refreshScopeControl()
+        }
+        currentDisplayMode = .bookmarks
+        reloadBookmarks()
+        persistViewStateIfNeeded()
+    }
+
+    private func applyLocationFilters(_ bookmarks: [Bookmark]) -> [Bookmark] {
+        let sorted = applyLocationSortIfNeeded(bookmarks)
+        guard let locationFilterVideoPaths else {
+            return sorted
+        }
+        return sorted.filter { locationFilterVideoPaths.contains($0.normalizedVideoPath) }
+    }
+
+    private func updateLocationFilterSummary() {
+        guard let locationFilterVideoPaths else {
+            locationFilterLabel.stringValue = ""
+            locationFilterRow.isHidden = true
+            return
+        }
+        let clipCount = locationFilterVideoPaths.count
+        let clipLabel = clipCount == 1 ? "clip" : "clips"
+        if let placeName = locationFilterPlaceName, !placeName.isEmpty {
+            locationFilterLabel.stringValue = "Location: \(placeName) · \(clipCount) \(clipLabel)"
+        } else {
+            locationFilterLabel.stringValue = "Location filter · \(clipCount) \(clipLabel)"
+        }
+        locationFilterRow.isHidden = false
+    }
+
+    @objc
+    private func handleClearLocationFilter(_ sender: Any?) {
+        _ = sender
+        guard locationFilterVideoPaths != nil else {
+            return
+        }
+        locationFilterVideoPaths = nil
+        locationFilterPlaceName = nil
+        reloadBookmarks()
+        persistViewStateIfNeeded()
+    }
+
+    private func openBookmarkForMapVideoPath(_ videoPath: String) {
+        dismissMapMarkerPreviews(suppressUntilMouseExit: true)
+        guard let bookmark = bookmarkStore.bestBookmarkForOpening(
+            videoPath: videoPath,
+            visibility: bookmarkVisibility
+        ) else {
+            return
+        }
+        onOpenBookmark?(bookmark)
+        // Selection / window activation can recreate annotation views; ensure panels stay gone.
+        DispatchQueue.main.async { [weak self] in
+            self?.dismissMapMarkerPreviews(suppressUntilMouseExit: true)
+        }
+    }
+
+    private func dismissMapMarkerPreviews(suppressUntilMouseExit: Bool = false) {
+        activeMapMarkerPreview?.dismissPreview(suppressUntilMouseExit: suppressUntilMouseExit)
+        activeMapMarkerPreview = nil
+        for annotation in mapView.annotations {
+            guard let view = mapView.view(for: annotation) as? MediaLocationMapMarkerView else {
+                continue
+            }
+            view.dismissPreview(suppressUntilMouseExit: suppressUntilMouseExit)
+        }
     }
 
     private func updateTagSelectionSummary() {
@@ -1254,6 +1822,7 @@ final class BookmarksWindowController: NSWindowController, NSWindowDelegate {
 
     private func dismissVisiblePreviewPanels() {
         activePreviewThumbnailCell = nil
+        dismissMapMarkerPreviews()
         for row in 0..<tableView.numberOfRows {
             guard let view = tableView.view(
                 atColumn: tableView.column(withIdentifier: ColumnIdentifier.thumbnail),
@@ -1361,6 +1930,10 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
         case ColumnIdentifier.filename:
             let cell = reusableFilenameCell(in: tableView)
             cell.configure(filename: bookmark.videoDisplayName)
+            return cell
+        case ColumnIdentifier.location:
+            let cell = reusableDateCell(in: tableView, identifier: "BookmarkLocationCellView")
+            cell.configure(value: mediaLocationStore.displayPlaceName(forPath: bookmark.normalizedVideoPath))
             return cell
         case ColumnIdentifier.importedDate:
             let cell = reusableDateCell(in: tableView, identifier: "BookmarkImportedDateCellView")
@@ -1534,6 +2107,367 @@ extension BookmarksWindowController: NSTableViewDataSource, NSTableViewDelegate 
     }
 }
 
+extension BookmarksWindowController: MKMapViewDelegate {
+    private static let mediaLocationClusteringIdentifier = "quickpreview.mediaLocation"
+
+    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        if let cluster = annotation as? MKClusterAnnotation {
+            let identifier = "MediaLocationClusterAnnotation"
+            let markerView = (mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation: cluster, reuseIdentifier: identifier)
+            markerView.annotation = cluster
+            markerView.markerTintColor = .systemOrange
+            markerView.glyphText = "\(cluster.memberAnnotations.count)"
+            markerView.displayPriority = .defaultHigh
+            markerView.collisionMode = .circle
+            markerView.canShowCallout = false
+            return markerView
+        }
+
+        guard let annotation = annotation as? MediaLocationMapAnnotation else {
+            return nil
+        }
+        let identifier = "MediaLocationMapAnnotation"
+        let markerView = (mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? MediaLocationMapMarkerView)
+            ?? MediaLocationMapMarkerView(annotation: annotation, reuseIdentifier: identifier)
+        markerView.annotation = annotation
+        markerView.markerTintColor = .systemOrange
+        markerView.glyphImage = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Play")
+        markerView.clusteringIdentifier = Self.mediaLocationClusteringIdentifier
+        markerView.collisionMode = .circle
+        markerView.displayPriority = .defaultLow
+        markerView.canShowCallout = true
+        markerView.rightCalloutAccessoryView = NSButton(
+            title: "Play",
+            target: nil,
+            action: nil
+        )
+        markerView.configure(
+            annotation: annotation,
+            thumbnailService: thumbnailService
+        )
+        markerView.onPreviewWillOpen = { [weak self] marker in
+            if self?.activeMapMarkerPreview !== marker {
+                self?.activeMapMarkerPreview?.dismissPreview()
+            }
+            self?.activeMapMarkerPreview = marker
+        }
+        markerView.onPreviewDidClose = { [weak self] marker in
+            if self?.activeMapMarkerPreview === marker {
+                self?.activeMapMarkerPreview = nil
+            }
+        }
+        return markerView
+    }
+
+    func mapView(_ mapView: MKMapView, clusterAnnotationForMemberAnnotations memberAnnotations: [MKAnnotation]) -> MKClusterAnnotation {
+        let cluster = MKClusterAnnotation(memberAnnotations: memberAnnotations)
+        let mediaMembers = memberAnnotations.compactMap { $0 as? MediaLocationMapAnnotation }
+        if let sharedTitle = sharedPlaceTitle(for: mediaMembers) {
+            cluster.title = sharedTitle
+            cluster.subtitle = "\(mediaMembers.count) clips"
+        } else {
+            cluster.title = "\(memberAnnotations.count) clips"
+        }
+        return cluster
+    }
+
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        _ = mapView
+        guard !suppressMapSelectionOpen else {
+            return
+        }
+        if let cluster = view.annotation as? MKClusterAnnotation {
+            handleClusterSelection(cluster)
+            return
+        }
+        guard let annotation = view.annotation as? MediaLocationMapAnnotation else {
+            return
+        }
+        openBookmarkForMapVideoPath(annotation.videoPath)
+    }
+
+    func mapView(
+        _ mapView: MKMapView,
+        annotationView view: MKAnnotationView,
+        calloutAccessoryControlTapped control: NSControl
+    ) {
+        _ = mapView
+        _ = control
+        guard let annotation = view.annotation as? MediaLocationMapAnnotation else {
+            return
+        }
+        openBookmarkForMapVideoPath(annotation.videoPath)
+    }
+
+    private func sharedPlaceTitle(for members: [MediaLocationMapAnnotation]) -> String? {
+        let titles = Set(members.compactMap { annotation -> String? in
+            guard let title = annotation.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty,
+                  annotation.subtitle != nil else {
+                return nil
+            }
+            return title
+        })
+        return titles.count == 1 ? titles.first : nil
+    }
+}
+
+final class MediaLocationMapAnnotation: NSObject, MKAnnotation {
+    let videoPath: String
+    let bookmarkID: BookmarkID
+    let thumbnailTimeSeconds: PlaybackSeconds
+    let coordinate: CLLocationCoordinate2D
+    let title: String?
+    let subtitle: String?
+
+    init(
+        videoPath: String,
+        bookmarkID: BookmarkID,
+        thumbnailTimeSeconds: PlaybackSeconds,
+        coordinate: CLLocationCoordinate2D,
+        title: String?,
+        subtitle: String?
+    ) {
+        self.videoPath = videoPath
+        self.bookmarkID = bookmarkID
+        self.thumbnailTimeSeconds = thumbnailTimeSeconds
+        self.coordinate = coordinate
+        self.title = title
+        self.subtitle = subtitle
+        super.init()
+    }
+}
+
+final class MediaLocationMapMarkerView: MKMarkerAnnotationView {
+    var onPreviewWillOpen: ((MediaLocationMapMarkerView) -> Void)?
+    var onPreviewDidClose: ((MediaLocationMapMarkerView) -> Void)?
+
+    private let previewImageView = NSImageView(frame: .zero)
+    private let previewPanel = BookmarkPreviewPanel(
+        contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+    )
+    private let previewContentView = BookmarkPreviewTrackingView(
+        frame: NSRect(x: 0, y: 0, width: 320, height: 200)
+    )
+    private var bookmarkID: BookmarkID?
+    private var currentVideoURL: URL?
+    private var currentTimeSeconds: PlaybackSeconds = 0
+    private weak var thumbnailService: VideoThumbnailService?
+    private var hoverTrackingArea: NSTrackingArea?
+    private var isHovering = false
+    private var suppressPreviewUntilMouseExit = false
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        configurePreviewChrome()
+    }
+
+    @available(*, unavailable)
+    required init?(coder aDecoder: NSCoder) {
+        nil
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        dismissPreview(suppressUntilMouseExit: false)
+        suppressPreviewUntilMouseExit = false
+        bookmarkID = nil
+        currentVideoURL = nil
+        thumbnailService = nil
+        previewImageView.image = nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        _ = event
+        guard !suppressPreviewUntilMouseExit else {
+            return
+        }
+        isHovering = true
+        showPreviewIfNeeded()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        _ = event
+        guard !isMouseInsideMarkerOnScreen() else {
+            return
+        }
+        suppressPreviewUntilMouseExit = false
+        isHovering = false
+        dismissPreview()
+    }
+
+    func configure(annotation: MediaLocationMapAnnotation, thumbnailService: VideoThumbnailService) {
+        bookmarkID = annotation.bookmarkID
+        currentVideoURL = URL(fileURLWithPath: annotation.videoPath)
+        currentTimeSeconds = annotation.thumbnailTimeSeconds
+        self.thumbnailService = thumbnailService
+        isHovering = false
+        previewImageView.image = Self.placeholderImage
+        previewPanel.orderOut(nil)
+
+        thumbnailService.requestThumbnail(
+            for: URL(fileURLWithPath: annotation.videoPath),
+            at: annotation.thumbnailTimeSeconds,
+            maximumSize: CGSize(width: 480, height: 270)
+        ) { [weak self] image in
+            guard let self, self.bookmarkID == annotation.bookmarkID else {
+                return
+            }
+            let resolvedImage = image ?? Self.placeholderImage
+            self.previewImageView.image = resolvedImage
+            self.updatePreviewSize(for: resolvedImage)
+            if self.isHovering, !self.suppressPreviewUntilMouseExit {
+                self.showPreviewIfNeeded()
+            }
+        }
+    }
+
+    func dismissPreview(suppressUntilMouseExit: Bool = false) {
+        isHovering = false
+        if suppressUntilMouseExit {
+            self.suppressPreviewUntilMouseExit = true
+        }
+        let wasVisible = previewPanel.isVisible
+        previewPanel.orderOut(nil)
+        if wasVisible {
+            onPreviewDidClose?(self)
+        }
+    }
+
+    private func configurePreviewChrome() {
+        previewImageView.translatesAutoresizingMaskIntoConstraints = false
+        previewImageView.imageScaling = .scaleProportionallyUpOrDown
+        previewImageView.imageAlignment = .alignCenter
+
+        previewContentView.wantsLayer = true
+        previewContentView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        previewContentView.layer?.cornerRadius = 12
+        previewContentView.layer?.masksToBounds = true
+        previewContentView.onLayout = { [weak self] bounds in
+            self?.previewImageView.frame = bounds.insetBy(dx: 12, dy: 12)
+        }
+        previewContentView.addSubview(previewImageView)
+        previewPanel.contentView = previewContentView
+        previewPanel.backgroundColor = .clear
+        previewPanel.isOpaque = false
+        previewPanel.hasShadow = true
+        previewPanel.hidesOnDeactivate = false
+        previewPanel.level = .floating
+    }
+
+    private func showPreviewIfNeeded() {
+        guard !suppressPreviewUntilMouseExit else {
+            return
+        }
+        guard let image = previewImageView.image else {
+            return
+        }
+        updatePreviewSize(for: image)
+        guard window != nil else {
+            return
+        }
+        onPreviewWillOpen?(self)
+        positionPreviewPanel(for: previewContentView.frame.size)
+        if !previewPanel.isVisible {
+            previewPanel.orderFront(nil)
+        }
+    }
+
+    private func updatePreviewSize(for image: NSImage) {
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            applyPreviewContentSize(NSSize(width: 320, height: 200))
+            return
+        }
+        let screenFrame = window?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let maxContentWidth = max(220, floor((screenFrame?.width ?? 1080) * 0.2))
+        let maxContentHeight = max(140, floor((screenFrame?.height ?? 720) * 0.2))
+        let widthScale = maxContentWidth / imageSize.width
+        let heightScale = maxContentHeight / imageSize.height
+        let scale = min(widthScale, heightScale, 1)
+        let contentWidth = max(220, floor(imageSize.width * scale))
+        let contentHeight = max(140, floor(imageSize.height * scale))
+        applyPreviewContentSize(NSSize(width: contentWidth + 24, height: contentHeight + 24))
+    }
+
+    private func applyPreviewContentSize(_ size: NSSize) {
+        previewContentView.setFrameSize(size)
+        previewImageView.frame = previewContentView.bounds.insetBy(dx: 12, dy: 12)
+        previewContentView.layoutSubtreeIfNeeded()
+        previewPanel.setContentSize(size)
+        if previewPanel.isVisible {
+            positionPreviewPanel(for: size)
+        }
+    }
+
+    private var markerFrameOnScreen: NSRect? {
+        guard let window else {
+            return nil
+        }
+        let frameInWindow = convert(bounds, to: nil)
+        return window.convertToScreen(frameInWindow)
+    }
+
+    private func isMouseInsideMarkerOnScreen() -> Bool {
+        guard let markerFrameOnScreen else {
+            return false
+        }
+        return markerFrameOnScreen.contains(NSEvent.mouseLocation)
+    }
+
+    private func positionPreviewPanel(for size: NSSize) {
+        guard let markerFrameOnScreen else {
+            return
+        }
+        let screenFrame = window?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        let x = min(
+            max(screenFrame.minX, markerFrameOnScreen.maxX + 12),
+            screenFrame.maxX - size.width
+        )
+        let y = min(
+            max(screenFrame.minY, markerFrameOnScreen.midY - (size.height / 2)),
+            screenFrame.maxY - size.height
+        )
+        previewPanel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+    }
+
+    private static let placeholderImage: NSImage = {
+        let size = NSSize(width: 128, height: 72)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(calibratedWhite: 0.16, alpha: 1).setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+        let symbolRect = NSRect(x: 44, y: 20, width: 40, height: 32)
+        if let symbol = NSImage(
+            systemSymbolName: "play.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(.init(pointSize: 24, weight: .regular)) {
+            symbol.draw(in: symbolRect)
+        }
+        image.unlockFocus()
+        return image
+    }()
+}
+
 extension BookmarksWindowController: NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
         _ = collectionView
@@ -1598,6 +2532,8 @@ private final class BookmarkTableView: NSTableView {
     var onReturnKey: (() -> Void)?
     var onDeleteKey: (() -> Void)?
     var onScrollWheel: (() -> Void)?
+    var willSelectRowForContextMenu: (() -> Void)?
+    var prepareContextMenu: ((Int) -> NSMenu?)?
     private(set) var mouseDownColumn: Int = -1
 
     override func mouseDown(with event: NSEvent) {
@@ -1621,6 +2557,21 @@ private final class BookmarkTableView: NSTableView {
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
         onScrollWheel?()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        guard row >= 0 else {
+            return nil
+        }
+
+        if !selectedRowIndexes.contains(row) {
+            willSelectRowForContextMenu?()
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+
+        return prepareContextMenu?(row)
     }
 }
 
@@ -2382,8 +3333,10 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
     var onClose: ((BookmarkThumbnailPickerSheetController) -> Void)?
 
     private let engine = PlaybackEngine()
+    private let mediaAccessStore: SecurityScopedMediaAccessStore
     private let originalBookmarkTimeSeconds: PlaybackSeconds
     private let videoURL: URL
+    private let shouldEndMediaAccess: Bool
     private var durationSeconds: PlaybackSeconds = 0
 
     private let instructionLabel = NSTextField(labelWithString: "Pick a frame from the same video to use as this bookmark thumbnail.")
@@ -2398,10 +3351,17 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
     private var durationLoadTask: Task<Void, Never>?
     private var wasPlayingBeforePlayheadDrag = false
 
-    init(bookmark: Bookmark) {
+    init(bookmark: Bookmark, mediaAccessStore: SecurityScopedMediaAccessStore) {
         self.bookmarkID = bookmark.id
+        self.mediaAccessStore = mediaAccessStore
         self.originalBookmarkTimeSeconds = bookmark.timeSeconds
-        self.videoURL = bookmark.videoURL
+        if let accessibleURL = mediaAccessStore.beginAccess(for: bookmark.videoURL) {
+            self.videoURL = accessibleURL
+            self.shouldEndMediaAccess = true
+        } else {
+            self.videoURL = bookmark.videoURL
+            self.shouldEndMediaAccess = false
+        }
         self.candidateTimeSeconds = bookmark.effectiveThumbnailTimeSeconds
 
         let window = NSWindow(
@@ -2431,6 +3391,9 @@ private final class BookmarkThumbnailPickerSheetController: NSWindowController, 
     deinit {
         durationLoadTask?.cancel()
         engine.pause()
+        if shouldEndMediaAccess {
+            mediaAccessStore.endAccess(for: videoURL)
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

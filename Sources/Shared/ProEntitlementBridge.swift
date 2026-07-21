@@ -60,29 +60,31 @@ private func logBridgeResponseBody(_ data: Data, context: String) {
 }
 
 /// Rejects legacy marketing-site URLs with `?token=` and ensures ticket links match the app’s configured bridge host.
-private func validateSecureBridgeDownloadURL(_ url: URL) throws {
-    guard url.scheme?.lowercased() == "https" else {
-        throw ProEntitlementBridgeError.missingSecureDownloadLink
-    }
-    guard url.path == "/api/bridge/pro-download" else {
-        QuickPreviewDebugLog.log("downloadURL rejected: path is \(url.path), expected /api/bridge/pro-download")
-        throw ProEntitlementBridgeError.missingSecureDownloadLink
-    }
-    guard let bridgeHost = AppEdition.current.bridgeAPIBaseURL?.host else {
-        throw ProEntitlementBridgeError.bridgeUnavailable
-    }
-    guard url.host == bridgeHost else {
-        QuickPreviewDebugLog.log("downloadURL host mismatch: got \(url.host ?? "?") expected \(bridgeHost) — set QUICKPREVIEW_BRIDGE_PUBLIC_URL on Vercel to this host")
-        throw ProEntitlementBridgeError.missingSecureDownloadLink
-    }
-    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-    guard items.contains(where: { $0.name == "t" && !($0.value ?? "").isEmpty }) else {
-        QuickPreviewDebugLog.log("downloadURL rejected: missing ticket query param t")
-        throw ProEntitlementBridgeError.missingSecureDownloadLink
-    }
-    if items.contains(where: { $0.name == "token" }) {
-        QuickPreviewDebugLog.log("downloadURL rejected: legacy token query param")
-        throw ProEntitlementBridgeError.missingSecureDownloadLink
+enum BridgeDownloadURLValidator {
+    static func validate(_ url: URL, bridgeHost: String? = AppEdition.current.bridgeAPIBaseURL?.host) throws {
+        guard url.scheme?.lowercased() == "https" else {
+            throw ProEntitlementBridgeError.missingSecureDownloadLink
+        }
+        guard url.path == "/api/bridge/pro-download" else {
+            QuickPreviewDebugLog.log("downloadURL rejected: path is \(url.path), expected /api/bridge/pro-download")
+            throw ProEntitlementBridgeError.missingSecureDownloadLink
+        }
+        guard let bridgeHost else {
+            throw ProEntitlementBridgeError.bridgeUnavailable
+        }
+        guard url.host == bridgeHost else {
+            QuickPreviewDebugLog.log("downloadURL host mismatch: got \(url.host ?? "?") expected \(bridgeHost) — set QUICKPREVIEW_BRIDGE_PUBLIC_URL on Vercel to this host")
+            throw ProEntitlementBridgeError.missingSecureDownloadLink
+        }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard items.contains(where: { $0.name == "t" && !($0.value ?? "").isEmpty }) else {
+            QuickPreviewDebugLog.log("downloadURL rejected: missing ticket query param t")
+            throw ProEntitlementBridgeError.missingSecureDownloadLink
+        }
+        if items.contains(where: { $0.name == "token" }) {
+            QuickPreviewDebugLog.log("downloadURL rejected: legacy token query param")
+            throw ProEntitlementBridgeError.missingSecureDownloadLink
+        }
     }
 }
 
@@ -113,7 +115,7 @@ private func decodeAppStoreLinkResponse(from data: Data) throws -> AppStoreLinkR
     guard let downloadURL else {
         throw ProEntitlementBridgeError.missingSecureDownloadLink
     }
-    try validateSecureBridgeDownloadURL(downloadURL)
+    try BridgeDownloadURLValidator.validate(downloadURL)
     return AppStoreLinkResponse(
         status: dto.status,
         email: dto.email,
@@ -251,9 +253,14 @@ final class ProEntitlementBridge {
         return currentSnapshot?.allowsProFeatures == true
     }
 
-    init(defaults: UserDefaults = .standard, session: URLSession = .shared) {
+    init(
+        defaults: UserDefaults = .standard,
+        session: URLSession = .shared,
+        bootstrapDefaults: UserDefaults? = nil
+    ) {
         self.defaults = defaults
-        self.bootstrapDefaults = UserDefaults(suiteName: AppEdition.proBootstrapContainerIdentifier)
+        self.bootstrapDefaults =
+            bootstrapDefaults ?? UserDefaults(suiteName: AppEdition.proBootstrapContainerIdentifier)
         self.session = session
 
         if

@@ -34,7 +34,7 @@ module.exports = function handler(req, res) {
       email: email.trim(),
       linkCode,
       appStoreDeepLink: `quickpreview://account-link?code=${encodeURIComponent(linkCode)}&email=${encodeURIComponent(email.trim())}`,
-      downloadURL: safeURL("/pro/download/"),
+      downloadURL: safeURL("pro/download/"),
     });
   } catch (error) {
     res.status(500).json({

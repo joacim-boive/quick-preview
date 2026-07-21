@@ -71,7 +71,7 @@ function siteBaseURL() {
     const host = String(vercel).replace(/^https?:\/\//i, "");
     return `https://${host}`;
   }
-  return "https://quickpreview.boive.se";
+  return "https://boive.se/quick-preview";
 }
 
 /**
@@ -179,7 +179,8 @@ function normalizeExpirationDate(expirationDate) {
 
 function parseAllowedBrowserOrigins() {
   const raw =
-    process.env.QUICKPREVIEW_ALLOWED_ORIGINS || "https://quickpreview.boive.se";
+    process.env.QUICKPREVIEW_ALLOWED_ORIGINS ||
+    "https://boive.se,https://www.boive.se";
   return raw
     .split(",")
     .map((s) => s.trim())

@@ -41,46 +41,40 @@ QuickPreview now supports two distribution paths:
 - `Release`: Mac App Store-safe edition with the core player, bookmarks, clip memory, and protected-media workflows.
 - `Pro`: direct-distribution edition for active subscribers who also want Finder live-follow.
 
-The App Store edition remains the billing source of truth. The PRO edition uses a mirrored unlock token delivered through the website bridge flow in `site/pro/` and `api/bridge/`.
+The App Store edition remains the billing source of truth. The PRO edition uses a mirrored unlock token delivered through the portal flow and `api/bridge/`.
 
-## Website and subscriber bridge (Vercel)
+## Marketing content and subscriber bridge
 
-The whole Git repo is correct to connect to Vercel, but the **Vercel project root must be the repository root** (not `site/`). The build runs **`npm run build`**, which copies `site/` into **`public/`** for static hosting. Serverless routes must stay at **`api/bridge/`** relative to that same root. `vercel.json` sets **`outputDirectory`: `public`**, **`buildCommand`**, and a short **`maxDuration`** on the bridge routes.
+QuickPreview's public pages are published by the separate Boive portal at `https://boive.se/quick-preview/`. The sanitized source metadata, feature copy, changelog, icon, and screenshots live in `marketing/`.
 
-### If the homepage is wrong or `/api/bridge/*` is 404
+The subscriber bridge and protected PRO download remain in this repository's Vercel project. The **Vercel project root must be the repository root** so Vercel can discover `api/bridge/`. The current build still copies the legacy `site/` directory into `public/` as a compatibility fallback; it is not the canonical marketing site.
 
-In **Project → Settings → General**:
+### If `/api/bridge/*` is 404
 
-- **Root Directory** — leave **empty** (or `.`). If you set this to `site`, Vercel never sees `api/`, so the bridge breaks. The app source HTML stays in `site/`; only the **build output** is `public/`.
+In **Project → Settings → General**, leave **Root Directory** empty (or `.`). If it is set to `site`, Vercel cannot discover the bridge routes.
 
 In **Project → Settings → Build & Deployment**:
 
 - **Framework Preset** — **Other** (or let `vercel.json` drive the build).
-- **Build Command** — `npm run build` (or enable **“Use vercel.json”** / clear overrides so `vercel.json` is used).
-- **Output Directory** — `public` (or rely on `vercel.json` and clear conflicting dashboard values).
-
-After fixing settings, run **Redeploy** on the latest commit.
+- **Build Command** — `npm run build`.
+- **Output Directory** — `public`.
 
 ### One-time: Vercel project and env
 
 1. [Create a project](https://vercel.com/new) from this Git repo (or run `vercel link` locally after `vercel login`).
 2. In **Project → Settings → Environment Variables**, add for **Production** (and **Preview** if you test linking on preview URLs):
    - **`QUICKPREVIEW_BRIDGE_SECRET`** — long random string (server-only; signs link codes and PRO tokens).
-   - **`QUICKPREVIEW_SITE_URL`** — keep **`https://quickpreview.boive.se`** if that is where you host the static `site/` files. The API uses this for portal/support links, not as the protected download host.
+   - **`QUICKPREVIEW_SITE_URL`** — **`https://boive.se/quick-preview`**. The API uses this for portal/support links, not as the protected download host.
    - **`QUICKPREVIEW_BRIDGE_PUBLIC_URL`** — your stable Vercel production origin, e.g. **`https://quick-preview-alpha.vercel.app`**, so the App Store app receives ticketed bridge URLs on the correct host.
    - **`QUICKPREVIEW_PRO_BLOB_PATHNAME`** — pathname of the **private Vercel Blob** that stores the notarized PRO DMG, e.g. **`downloads/QuickPreviewPro.dmg`**. The file is streamed only through **`/api/bridge/pro-download`** after ticket verification.
    - **`BLOB_READ_WRITE_TOKEN`** — Vercel Blob server token for the same project/environment.
-   - **`QUICKPREVIEW_ALLOWED_ORIGINS`** — `https://quickpreview.boive.se` (comma-separated if you add more) so the browser can **POST** `create-link-code` from your static portal to Vercel (**CORS**).
+   - **`QUICKPREVIEW_ALLOWED_ORIGINS`** — `https://boive.se,https://www.boive.se` so the browser can **POST** `create-link-code` from the portal to Vercel.
    - **`QUICKPREVIEW_DEVELOPER_ID_APP`** — your **Developer ID Application** signing identity for direct distribution.
    - **Notarization credentials for `./Scripts/build.sh package-pro`** — either:
      - **`QUICKPREVIEW_NOTARY_PROFILE`** — keychain profile created with `xcrun notarytool store-credentials`
      - or **`QUICKPREVIEW_NOTARY_KEY`**, **`QUICKPREVIEW_NOTARY_KEY_ID`**, **`QUICKPREVIEW_NOTARY_ISSUER`**
      - or **`QUICKPREVIEW_NOTARY_APPLE_ID`**, **`QUICKPREVIEW_NOTARY_TEAM_ID`**, **`QUICKPREVIEW_NOTARY_PASSWORD`**
-3. **Split hosting:** If the marketing site lives on `quickpreview.boive.se` and only **Vercel** runs **`/api/bridge/*`**, set **`bridgeAPIBaseURL`** in `AppEdition.swift` and the **`qp-bridge-api-origin`** meta tags on `site/pro/*.html` to your Vercel **Production** URL (see **Project → Domains**). Re-upload static files to `boive.se` after changing the meta tags.
-
-### Same-origin note
-
-You only need `quickpreview.boive.se` on Vercel if you want **one** host for both static files and API. If the site stays elsewhere, use the split setup above instead of moving DNS for the main domain to Vercel.
+3. Keep `bridgeAPIBaseURL` in `AppEdition.swift` pointed at the stable Vercel bridge origin. Never point it at the static Boive portal.
 
 ### HTTP 401 — “Authentication Required” (HTML from Vercel)
 

@@ -8,7 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let backgroundShortcutService = BackgroundShortcutService()
     private let bookmarkStore = BookmarkStore()
     private let finderSelectionService = FinderSelectionService()
-    private let thumbnailService = VideoThumbnailService()
+    private let mediaAccessStore = SecurityScopedMediaAccessStore()
+    private lazy var thumbnailService = VideoThumbnailService(mediaAccessStore: mediaAccessStore)
+    private lazy var mediaLocationStore = MediaLocationStore()
+    private lazy var mediaLocationResolver = MediaLocationResolver(
+        store: mediaLocationStore,
+        mediaAccessStore: mediaAccessStore
+    )
     private let protectedBookmarksSessionController = ProtectedBookmarksSessionController()
     private let proEntitlementBridge = ProEntitlementBridge()
     private lazy var subscriptionController = SubscriptionController(
@@ -83,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         windowController?.closeCurrentVideoIfNeeded()
         windowController?.flushPersistedStateWrites()
         bookmarkStore.flushPendingWrites()
+        mediaLocationStore.flushPendingWrites()
         finderSelectionService.stop()
         if let appDidBecomeActiveObserver {
             NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
@@ -429,6 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let controller = MainPlayerWindowController(
             bookmarkStore: bookmarkStore,
             thumbnailService: thumbnailService,
+            mediaAccessStore: mediaAccessStore,
             finderSelectionService: finderSelectionService
         )
         if let shortcutHintText {
@@ -440,6 +448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controller.onCurrentVideoURLChange = { [weak self] videoURL in
             self?.bookmarksWindowController?.setCurrentVideoURL(videoURL)
             self?.refreshFinderSelectionMonitoring()
+            if let videoURL {
+                self?.mediaLocationResolver.resolve(url: videoURL)
+            }
         }
         controller.onBookmarkNavigationRequested = { [weak self] delta in
             self?.bookmarksWindowController?.navigateSelection(delta: delta)
@@ -465,6 +476,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let controller = BookmarksWindowController(
             bookmarkStore: bookmarkStore,
             thumbnailService: thumbnailService,
+            mediaAccessStore: mediaAccessStore,
+            mediaLocationStore: mediaLocationStore,
+            mediaLocationResolver: mediaLocationResolver,
             protectedBookmarksSessionController: protectedBookmarksSessionController
         )
         controller.onOpenBookmark = { [weak self] bookmark in
